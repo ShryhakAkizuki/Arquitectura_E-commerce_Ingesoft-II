@@ -1,0 +1,17 @@
+{
+  "name": "ecommerce-ingesoft-ii",
+  "version": "1.0.0",
+  "private": true,
+  "description": "E-commerce simplificado con checkout — Prueba técnica FullStack, Ingeniería de Software II (Ingesoft II)",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "concurrently -n backend,frontend -c blue,green \"npm:backend\" \"npm:frontend\"",
+    "backend": "cd backend && mvnw.cmd spring-boot:run",
+    "frontend": "cd frontend && npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  }
+}
