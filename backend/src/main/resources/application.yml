@@ -1,0 +1,84 @@
+# =============================================================================
+# Configuracion de datos, JWT y parametros de negocio
+# Referencias: arquitectura.md (datos), (seguridad/JWT), (checkout), (riesgos)
+#
+# Perfil por defecto: PostgreSQL local (BD `shop`).
+# Plan B para maquinas sin PostgreSQL:
+#   ./mvnw spring-boot:run -Dspring-boot.run.profiles=h2
+# =============================================================================
+
+spring:
+  application:
+    name: shop-backend
+
+  # --- Datasource: PostgreSQL local, BD `shop` -------------------------------
+  datasource:
+    url: jdbc:postgresql://localhost:5432/shop
+    username: postgres
+    password: admin
+    driver-class-name: org.postgresql.Driver
+
+  # --- JPA / Hibernate ---------------------------------------------------------
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    # Buenas prácticas: no mantener la sesion JPA abierta durante el request.
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+
+  # --- Flyway: migraciones versionadas ------------------
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  # --- SpringDoc / Swagger UI (/swagger-ui.html es publico) ----------------
+  springdoc:
+    swagger-ui:
+      path: /swagger-ui.html
+
+server:
+  # Puerto del backend: http://localhost:8080/api.
+  port: 8080
+
+# =============================================================================
+# JWT: token emitido en POST /api/auth/login y enviado como
+# "Authorization: Bearer <token>" en cada peticion autenticada.
+# =============================================================================
+jwt:
+  # SECRETO de firma HS256. PLACEHOLDER documentado
+  secret: "${JWT_SECRET:cambiar-este-secreto-solo-desarrollo-local-0123456789-abcdef9876543210}"
+  # Expiracion del token de acceso: 2 horas.
+  expiration-ms: 7200000
+
+# =============================================================================
+# Parametros de negocio del checkout
+# =============================================================================
+checkout:
+  # Envio FIJO aplicado a todo pedido: total = subtotal + shipping.
+  shipping-fee: 5000.00
+  # Tarjetas terminadas en este sufijo simulan el RECHAZO de la pasarela.
+  card-declined-suffix: "0002"
+
+# =============================================================================
+# Perfil "h2": H2 en memoria con MODO PostgreSQL y las MISMAS
+# migraciones de Flyway (V1/V2). Para maquinas sin PostgreSQL:
+#   ./mvnw spring-boot:run -Dspring-boot.run.profiles=h2
+# =============================================================================
+---
+spring:
+  config:
+    activate:
+      on-profile: h2
+  datasource:
+    # MODE=PostgreSQL + DATABASE_TO_LOWER=TRUE
+    url: jdbc:h2:mem:shop;MODE=PostgreSQL;DATABASE_TO_LOWER=TRUE;DB_CLOSE_DELAY=-1;DEFAULT_NULL_ORDERING=HIGH
+    username: sa
+    password: ""
+    driver-class-name: org.h2.Driver
+  h2:
+    # Consola web para inspeccionar la BD en memoria durante la demo/sustentacion.
+    console:
+      enabled: true
+      path: /h2-console

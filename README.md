@@ -24,46 +24,45 @@ E-commerce simplificado con checkout: catálogo de productos, carrito, registro/
 
 ```
 Arquitectura_E-commerce_Ingesoft-II/
-├── package.json                  # scripts raiz (concurrently)
-├── README.md                     # guia de arranque y uso
+├── package.json
+├── README.md
 ├── backend/                      # Spring Boot + Maven
 │   ├── pom.xml
-│   ├── mvnw, mvnw.cmd            # Maven wrapper (version consistente)
+│   ├── mvnw, mvnw.cmd
 │   └── src
 │       ├── main
 │       │   ├── java/com/ingesoft/shop
-│       │   │   ├── config/       # SecurityConfig, OpenApiConfig, CorsConfig
-│       │   │   ├── controller/   # Auth, User, Product, Cart, Checkout, Order, Admin
-│       │   │   ├── dto/          # request/ y response/ por dominio
-│       │   │   ├── exception/    # GlobalExceptionHandler + excepciones de negocio
-│       │   │   ├── security/     # JwtTokenProvider, JwtAuthFilter, UserDetailsService
-│       │   │   ├── service/      # interfaces I*Service + implementaciones
-│       │   │   │   └── payment/  # IPaymentProvider + SimulatedPaymentProvider
-│       │   │   ├── repository/   # Spring Data JPA
-│       │   │   ├── entity/       # entidades JPA
-│       │   │   └── enums/        # Role, OrderStatus, PaymentStatus
+│       │   │   ├── config/
+│       │   │   ├── controller/
+│       │   │   ├── dto/
+│       │   │   ├── exception/
+│       │   │   ├── security/
+│       │   │   ├── service/
+│       │   │   │   └── payment/
+│       │   │   ├── repository/
+│       │   │   ├── entity/
+│       │   │   └── enums/
 │       │   └── resources
 │       │       ├── application.yml
-│       │       └── db/migration/ # Flyway V1__init.sql, V2__seed.sql
+│       │       └── db/migration/
 │       └── test                  # pruebas unitarias e integracion
 ├── frontend/                     # React 18 + Vite + TypeScript
 │   ├── src
-│   │   ├── api/                  # cliente axios + funciones por dominio
-│   │   ├── components/           # UI reutilizable (ProductCard, CartItem...)
-│   │   ├── context/              # AuthContext, CartContext
-│   │   ├── hooks/                # useAuth, useCart
-│   │   ├── pages/                # Catalog, ProductDetail, Cart, Checkout, Profile...
-│   │   ├── pages/admin/          # AdminProducts, AdminOrders
-│   │   └── types/                # tipos TypeScript compartidos
+│   │   ├── api/
+│   │   ├── components/
+│   │   ├── context/
+│   │   ├── hooks/
+│   │   ├── pages/
+│   │   ├── pages/admin/
+│   │   └── types/
 │   └── ...
-├── scripts/                      # utilidades (seed extra, verificacion e2e)
+├── scripts/
 ├── docs/
 │   ├── arquitectura.md           # documento de arquitectura
 │   ├── decisiones-adr.md         # registros de decisiones
 │   ├── solid-dry.md              # evidencias por principio
-│   ├── api.md                    # guia de endpoints
-│   └── guia-sustentacion.md      # guion de la defensa
-└── .env/                         # enunciado (no tocar)
+│   └── api.md                    # guia de endpoints
+└── .env/
 ```
 
 ## Arranque
@@ -81,7 +80,7 @@ El esquema y los datos de ejemplo los crea **Flyway** automáticamente al arranc
 ### 2. Instalar dependencias
 
 ```bash
-# Raíz: scripts de desarrollo (concurrently)
+# Raíz: scripts de desarrollo
 npm install
 
 # Backend: el Maven wrapper descarga las dependencias al compilar
@@ -155,7 +154,6 @@ cd frontend && npm test
 | Decisiones técnicas (ADR) | `docs/decisiones-adr.md` |
 | Evidencias SOLID/DRY | `docs/solid-dry.md` |
 | Documentación de API | `docs/api.md` + Swagger UI en `/swagger-ui.html` |
-| Guía de sustentación | `docs/guia-sustentacion.md` |
 | Pruebas ejecutables | `backend/src/test`, `frontend/src/**/tests` |
 | README de arranque | este archivo |
 
