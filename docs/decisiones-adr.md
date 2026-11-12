@@ -2,7 +2,7 @@
 
 Registro de decisiones técnicas del proyecto.
 
-**Estado de los ADR:**
+**Estado de los ADR** (al último commit):
 
 | ADR | Tema |
 |-----|------|
@@ -12,10 +12,6 @@ Registro de decisiones técnicas del proyecto.
 | ADR-004 | Enums de dominio como `VARCHAR` + `CHECK` (portabilidad PG/H2) |
 | ADR-005 | Monorepo npm + Maven wrapper, sin Docker (MVP local) |
 | ADR-006 | Autenticación stateless: JWT HS256 + BCrypt |
-| ADR-007 | Pago simulado con sufijo de tarjeta configurable |
-| ADR-008 | Órdenes como histórico inmutable (denormalización de `order_items`) |
-| ADR-009 | Carrito 1-a-1 con usuario y `unit_price` capturado al agregar |
-| ADR-010 | Soft delete de productos (`available = false`) |
 | ADR-011 | Seed determinístico con hashes BCrypt precomputados |
 | ADR-012 | Checkstyle en la fase `validate` del build (falla el build ante violación) |
 
@@ -103,34 +99,26 @@ Registro de decisiones técnicas del proyecto.
 ---
 
 
-## ADR-008 · Órdenes como histórico inmutable (denormalización de `order_items`)
+## ADR-006 · Autenticación stateless: JWT HS256 + BCrypt
 
-[`V1__init.sql`](../backend/src/main/resources/db/migration/V1__init.sql) (tabla `order_items` con `product_name` y `unit_price`)
+[`JwtTokenProvider.java`](../backend/src/main/java/com/ingesoft/shop/security/JwtTokenProvider.java), [`JwtAuthFilter.java`](../backend/src/main/java/com/ingesoft/shop/security/JwtAuthFilter.java), [`AppUserDetailsService.java`](../backend/src/main/java/com/ingesoft/shop/security/AppUserDetailsService.java), [`SecurityConfig.java`](../backend/src/main/java/com/ingesoft/shop/config/SecurityConfig.java), [`application.yml`](../backend/src/main/resources/application.yml) (bloque `jwt`)
 
-**Contexto:** los admins pueden cambiar el nombre o el precio de un producto después de realizada una compra; la orden ya emitida no debería modificarse.
-
-**Decisión:** `order_items` denormaliza `product_name` y `unit_price` en el momento de la compra. La orden queda como un **histórico inmutable**: no se re-lee el producto para calcular totales ni mostrar detalles.
-
-**Consecuencias:**
-- (+) Trazabilidad contable correcta: la orden siempre refleja lo que se pagó.
-- (−) Ligera redundancia de datos (nombre/precio duplicados) — costo aceptable frente a la corrección del histórico.
-
----
-
-## ADR-009 · Carrito 1-a-1 con usuario y `unit_price` capturado al agregar
-
-[`V1__init.sql`](../backend/src/main/resources/db/migration/V1__init.sql) (`carts` con `uq_carts_user_id`, `cart_items` con `unit_price`)
-
-**Contexto:** el carrito debe persistir entre sesiones (requisito R3) y el precio puede cambiar entre el momento de agregar y el de pagar.
+**Contexto:** la API la consume un frontend distinto (React) sobre HTTP; el backend debe servir peticiones sin estado de sesión en el servidor y cumplir R1 (autenticación segura + autorización por rol `USER`/`ADMIN`). Un usuario deshabilitado o eliminado debe dejar de poder autenticarse aunque tenga un token emitido.
 
 **Decisión:**
-- `carts` tiene relación **1-a-1** con `users` (PK compuesta/FK única): cada usuario tiene exactamente un carrito, persistido en la BD (no en localStorage del navegador).
-- `cart_items.unit_price` captura el precio **vigente en el momento de agregar**; en el checkout se re-valida contra el stock y el subtotal usa el precio capturado.
+- Token **stateless**: JWT firmado con **HS256** (JJWT 0.12.x). El secreto se lee de `jwt.secret` (placeholder de desarrollo documentado; en entornos reales se exporta `JWT_SECRET`) y la expiración es configurable por `jwt.expiration-ms` (default **2 h**).
+- El *subject* del token es el **email** del usuario (su identificador de login) y se incluye un claim `role` informativo. El rol que **autoriza** no se toma del claim, sino de la BD en cada petición (ver abajo): el token solo identifica, la BD autoriza.
+- `SessionCreationPolicy.STATELESS` y CSRF deshabilitado: no hay sesión HTTP.
+- [`JwtAuthFilter`](../backend/src/main/java/com/ingesoft/shop/security/JwtAuthFilter.java) (`OncePerRequestFilter`) se inserta **antes** de `UsernamePasswordAuthenticationFilter`. Por cada petición con header `Authorization: Bearer <token>`: valida firma y expiración (`JwtTokenProvider.validateToken`), recarga el usuario por email desde la BD y **rechaza la autenticación** si el usuario ya no existe o está inactivo (`active = false` → `disabled` en `UserDetails`); solo entonces puebla el `SecurityContextHolder` con las autoridades leídas de la BD.
+- Contraseñas: un único Bean `PasswordEncoder` (`BCryptPasswordEncoder`, fuerza 10) que es la fuente única para hashear (registro/cambio de contraseña) y comparar (login).
+- Los errores de seguridad (401/403) se responden en el formato estándar `ApiError` mediante `AuthenticationEntryPoint` y `AccessDeniedHandler` propios de `SecurityConfig`.
 
 **Consecuencias:**
-- (+) "Persistente entre sesiones" cumplido sin estado en el cliente.
-- (+) Regla clara y simple para el usuario: ve el precio con el que agregó el producto.
-- (−) Si el precio baja entre el agregar y el pagar, el usuario paga el precio capturado (comportamiento documentado y aceptado).
+- (+) Sin sesiones en el servidor: cualquier instancia atiende cualquier petición; escalamiento horizontal gratis.
+- (+) Un usuario deshabilitado o eliminado queda bloqueado **en la siguiente petición** (re-lectura por petición), lo que mitiga la debilidad clásica del "token válido hasta su expiración".
+- (−) El token no puede revocarse de forma activa antes de su expiración (mitigación: re-lectura del usuario por petición).
+- (−) Una consulta a BD extra por petición autenticada (aceptable en la escala del MVP).
+- (−) El secreto de firma debe protegerse y rotarse: `JWT_SECRET` debe exportarse fuera de desarrollo local.
 
 ---
 

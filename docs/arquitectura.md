@@ -10,13 +10,13 @@ Tienda online con autenticación por roles (usuario/administrador), gestión CRU
 
 ### 1.1 Trazabilidad de requerimientos
 
-| # | Requerimiento | Módulo responsable | Evidencia |
-|---|---------------|--------------------|-----------|
-| R1 | Autenticación y gestión de usuarios segura | `backend: auth` (JWT + BCrypt) | Endpoints `/api/auth/*`, `/api/users/me` |
-| R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` y `orders` con `@PreAuthorize("hasRole('ADMIN')")` | Endpoints `/api/admin/*` |
-| R3 | Carrito y checkout fluidos | `backend: cart` + `checkout`; `frontend: cart` | Flujo documentado|
-| R4 | Validaciones de stock y pagos | `CartService` y `CheckoutService` transaccional | Pruebas unitarias |
-| R5 | Interfaz clara de productos y detalles | `frontend: catalog` | Páginas catálogo y detalle |
+| # | Requerimiento | Módulo responsable | Evidencia | Estado |
+|---|---------------|--------------------|-----------|--------|
+| R1 | Autenticación y gestión de usuarios segura | `backend: auth` (JWT + BCrypt) | Endpoints `/api/auth/*`, `/api/users/me` | Implementado |
+| R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` y `orders` con `@PreAuthorize("hasRole('ADMIN')")` | Endpoints `/api/admin/*` | Pendiente |
+| R3 | Carrito y checkout fluidos | `backend: cart` + `checkout`; `frontend: cart` | Flujo documentado | Pendiente |
+| R4 | Validaciones de stock y pagos | `CartService` y `CheckoutService` transaccional | Pruebas unitarias | Pendiente |
+| R5 | Interfaz clara de productos y detalles | `frontend: catalog` | Páginas catálogo y detalle | Pendiente |
 
 ### 1.2 Criterios de evaluación → estrategia
 
@@ -25,7 +25,7 @@ Tienda online con autenticación por roles (usuario/administrador), gestión CRU
 | Buenas prácticas | Convenciones por capas, DTOs de entrada/salida, manejo global de errores, validación con Bean Validation, Checkstyle en el build |
 | SOLID | Mapa explícito + evidencias en [`solid-dry.md`](solid-dry.md) |
 | DRY | Reglas de negocio únicas en servicios, capa presentacional delgada, reutilización de componentes |
-| Sustentación | Arquitectura por capas, diagramas, ADRs en [`decisiones-adr.md`](decisiones-adr.md) y [`guia-sustentacion.md`](guia-sustentacion.md) |
+| Sustentación | Arquitectura por capas, diagramas, ADRs en [`decisiones-adr.md`](decisiones-adr.md) y evidencias de código en [`solid-dry.md`](solid-dry.md) |
 | Pruebas unitarias | JUnit 5 + Mockito en backend, Vitest + RTL en frontend |
 
 ## 3. Visión general de la arquitectura
@@ -156,7 +156,7 @@ El esquema implementado en [`V1__init.sql`](../backend/src/main/resources/db/mig
 | Decisión | Justificación | ADR |
 |----------|---------------|-----|
 | `ORDER_ITEMS` denormaliza `product_name` y `unit_price` | Una orden es un **histórico inmutable**: si el admin cambia el precio o el nombre después, la orden no se modifica | ADR-008 |
-| `CART_ITEMS.unit_price` se captura al momento de agregar | El carrito refleja el precio vigente cuando el usuario agregó el producto; se re-valida en checkout | ADR-011 |
+| `CART_ITEMS.unit_price` se captura al momento de agregar | El carrito refleja el precio vigente cuando el usuario agregó el producto; se re-valida en checkout | ADR-009 |
 | `PAYMENTS` con `transaction_id` y `failure_reason` | Trazabilidad: se puede demostrar el flujo de pago rechazado con evidencia | ADR-007 |
 | Enums de dominio como `VARCHAR` + `CHECK` | Portabilidad PostgreSQL/H2 (H2 no soporta `CREATE TYPE ... AS ENUM`) | ADR-004 |
 | Índices en `orders.user_id`, `orders.status`, `products.available`, `cart_items.cart_id` | Consultas frecuentes (mis órdenes, listado admin, catálogo activo, carga de carrito) | ADR-002 |
@@ -164,6 +164,8 @@ El esquema implementado en [`V1__init.sql`](../backend/src/main/resources/db/mig
 **Migraciones con Flyway** (`V1__init.sql`, `V2__seed.sql`): esquema versionado, reproducible y dueño único del esquema (`ddl-auto: validate`). Seed determinístico: 1 admin, 1 usuario y 8 productos (uno con stock bajo para demostrar `INSUFFICIENT_STOCK`).
 
 ### 4.1 Estados
+
+> Estados definidos en el esquema (`V1__init.sql`) y en los enums `OrderStatus`/`PaymentStatus` (implementado); las transiciones se implementan en los módulos Checkout y Órdenes (pendientes).
 
 **Ciclo de vida de la orden:**
 
@@ -221,11 +223,6 @@ Base URL: `http://localhost:8080/api`. La referencia completa por endpoint con e
 |---------|-----------|--------|
 | Auth | `POST /auth/register`, `POST /auth/login` | Público |
 | Users | `GET /users/me`, `PUT /users/me` | Usuario |
-| Products | `GET /products`, `GET /products/{id}` | Público |
-| Cart | `GET /cart`, `POST /cart/items`, `PATCH /cart/items/{itemId}`, `DELETE /cart/items/{itemId}` | Usuario |
-| Checkout | `POST /checkout` | Usuario |
-| Orders | `GET /orders/mine`, `GET /orders/mine/{id}` | Usuario |
-| Admin | `GET/POST /admin/products`, `PUT/DELETE /admin/products/{id}`, `PATCH /admin/products/{id}/stock`, `GET /admin/orders`, `GET /admin/orders/{id}`, `PATCH /admin/orders/{id}/status` | Admin |
 | Docs | `/swagger-ui.html` | Público |
 
 **Formato de error estándar** (todo el backend responde igual):
@@ -241,71 +238,28 @@ Base URL: `http://localhost:8080/api`. La referencia completa por endpoint con e
 
 Códigos de negocio: `EMAIL_ALREADY_REGISTERED`, `INVALID_CREDENTIALS`, `PRODUCT_NOT_FOUND`, `INSUFFICIENT_STOCK`, `CART_EMPTY`, `PAYMENT_DECLINED`, `ORDER_NOT_FOUND`, `FORBIDDEN`, `ORDER_STATUS_INVALID`.
 
-## 7. Flujo de checkout (R3, R4)
-
-```mermaid
-sequenceDiagram
-    participant UI as Pagina Checkout
-    participant CS as CheckoutService
-    participant PS as PaymentService
-    participant PP as SimulatedPaymentProvider
-    participant DB as PostgreSQL
-
-    UI->>CS: POST /checkout (direccion, metodo, tarjeta)
-    CS->>DB: BEGIN TRANSACTION
-    CS->>DB: SELECT FOR UPDATE en cart_items
-    CS->>CS: validar stock de cada item
-    alt Stock insuficiente
-        CS-->>UI: 409 INSUFFICIENT_STOCK y rollback
-    end
-    CS->>DB: crear Order PENDING + OrderItems
-    CS->>PS: process(order, paymentData)
-    PS->>PP: pay(amount, card)
-    PP-->>PS: CONFIRMED o FAILED
-    PS->>DB: registrar Payment
-    alt Pago confirmado
-        CS->>DB: descontar stock, Order a PAID, vaciar carrito
-        CS->>DB: COMMIT
-        CS-->>UI: 201 + orden completa
-    else Pago rechazado
-        CS->>DB: Payment FAILED, Order queda PENDING
-        CS->>DB: COMMIT
-        CS-->>UI: 402 PAYMENT_DECLINED + orderNumber
-    end
-```
-
-**Reglas de negocio (únicas, en la capa de servicio — DRY):**
-
-1. El carrito debe tener al menos un ítem (`CART_EMPTY`).
-2. Stock validado bajo **bloqueo de fila** (`SELECT ... FOR UPDATE`): dos checkouts concurrentes del mismo producto no pueden sobrevender.
-3. Subtotal = Σ(cantidad × precio unitario capturado en el carrito). Envío fijo configurado (`checkout.shipping-fee: 5000.00`).
-4. El proveedor de pago decide; el servicio de checkout **no conoce** cómo se procesa.
-5. Pago fallido → la orden se conserva en `PENDING` para permitir reintento; no se descuenta stock.
-6. Cancelación admin de orden `PAID` → el stock se restaura transaccionalmente.
-7. **Regla del proveedor simulado:** la tarjeta terminada en `0002` (sufijo configurable: `checkout.card-declined-suffix`) simula rechazo de la pasarela — determinístico, ideal para demostrar el flujo de error en la sustentación.
-
-## 8. Mapa SOLID → código
+## 7. Mapa SOLID → código
 
 | Principio | Ejemplo en el proyecto | Elemento |
 |-----------|------------------------|----------|
-| **S**ingle Responsibility | `CheckoutService` orquesta; la validación de stock, el pago y el descuento de stock son responsabilidades de servicios propios | `CheckoutService`, `PaymentService`, `StockService` |
-| **O**pen/Closed | Nuevo gateway = nueva clase `IPaymentProvider` sin tocar `PaymentService` ni `CheckoutService` | `SimulatedPaymentProvider` → gateway real futuro |
-| **L**iskov Substitution | Cualquier implementación de `IPaymentProvider` respeta el contrato completo (mismo estado, misma semántica) y es intercambiable en tests | `IPaymentProvider` |
-| **I**nterface Segregation | Interfaces pequeñas y específicas: `IProductService` (público) ≠ `IProductAdminService` (admin); `IPaymentProvider` tiene un solo método | `service/` |
-| **D**ependency Inversion | Controladores y servicios dependen de interfaces, no de implementaciones; inyección vía constructor | Todo el backend |
+| **S**ingle Responsibility | `AuthController` solo traduce HTTP → DTO; `AuthServiceImpl` concentra las reglas de negocio; `JwtTokenProvider` solo emite/valida tokens;| `AuthController`, `AuthServiceImpl`, `JwtTokenProvider` |
+| **O**pen/Closed | `ErrorCode` crece por adición sin tocar el handler;| `ErrorCode`;|
+| **L**iskov Substitution | `UserRepository` (Spring Data) es mockeable y `AuthServiceImpl` cumple el contrato completo;| `UserRepository`, `AuthServiceImpl`;|
+| **I**nterface Segregation | `IAuthService` (4 métodos de auth/perfil) y `UserRepository` (2 consultas) son interfaces pequeñas y específicas;| `IAuthService`, `UserRepository`;|
+| **D**ependency Inversion | Inyección por constructor en `AuthController` → `IAuthService` → `UserRepository`/`PasswordEncoder` (interfaz); `SecurityConfig` inyecta `JwtAuthFilter`| Todo el backend |
 
-**DRY:** una regla de negocio vive en un único servicio (p. ej. "validar stock" solo en `StockService`, y la usan carrito, checkout y cancelación); el frontend no duplica reglas de negocio (validaciones de stock/precio viven en el backend); los tipos TypeScript y los DTOs Java modelan el mismo contrato; componente `ProductCard` único entre catálogo y detalle.
+> Evidencias con fragmentos de código real: [`solid-dry.md`](solid-dry.md) — cubre los módulos implementados (Auth, Users, Seguridad y manejo de errores);
 
-> Evidencias con fragmentos de código real: [`solid-dry.md`](solid-dry.md) *(se completa conforme se implementa cada capa)*.
-
-## 9. Manejo de errores y calidad
+## 8. Manejo de errores y calidad
 
 - **Backend:** `@ControllerAdvice` global → excepciones de negocio (`BusinessException` con código) mapeadas al formato; `400` para validación, `401/403` para seguridad, `404` para no encontrado, `409` para conflictos de stock/estado, `402` para pago rechazado.
 - **Transaccionalidad:** `@Transactional` en operaciones que tocan stock+orden+pago; rollback automático ante cualquier excepción.
 - **Frontend:** interceptores centralizados de Axios, estados de carga/error/vacío en cada página de listado, mensajes de error del backend mostrados textualmente.
 - **Linters:** Checkstyle (backend, **ya activo** en la fase `validate` del build) + ESLint + Prettier.
 
-## 10. Estrategia de pruebas
+## 9. Estrategia de pruebas
+
+> Estrategia planificada: aún no hay tests en el repositorio; se escriben conforme se avanza por módulo.
 
 | Capa | Herramienta | Casos prioritarios |
 |------|-------------|--------------------|
@@ -315,7 +269,7 @@ sequenceDiagram
 
 Cada test documenta **arrangement–action–assertion** y el requerimiento que cubre (comentario `// R4:`) → evidencia directa para la sustentación.
 
-## 11. Riesgos y mitigaciones
+## 10. Riesgos y mitigaciones
 
 | Riesgo | Mitigación |
 |--------|-----------|
@@ -323,3 +277,4 @@ Cada test documenta **arrangement–action–assertion** y el requerimiento que 
 | Sobreventa por compras concurrentes | `SELECT ... FOR UPDATE` en checkout + test de concurrencia |
 | Alcance que crece en la sustentación | El MVP está acotado a §1.1; mejoras (gateway real, Docker, despliegue) se documentan como roadmap en los ADR, no se implementan |
 | Diferencia de versiones JDK/Node | Maven wrapper en backend + `engines` en `package.json` + requisitos en README |
+

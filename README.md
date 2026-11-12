@@ -1,160 +1,283 @@
-# Arquitectura_E-commerce_Ingesoft-II
+# E-commerce simplificado con checkout
 
-Prueba técnica para la asignatura de **Ingeniería de Software II (Ingesoft II)**.
+> **Arquitectura E-commerce Ingesoft II** — Prueba técnica FullStack, Ingeniería de Software II (Ingesoft).
 
-E-commerce simplificado con checkout: catálogo de productos, carrito, registro/login con JWT, pasarela de pago simulada y panel de administración.
+E-commerce de un solo dominio (productos de tecnología) con registro de usuario,
+catálogo, carrito, checkout y pago **simulado**. El proyecto se desarrolla de
+manera incremental: la documentación describe **solo lo implementado hasta el
+último commit** y las secciones de cada módulo se añaden cuando el módulo se
+implementa.
 
-## Stack técnico
+**Última actualización de la documentación:** 2026-11-12.
 
-| Capa | Tecnología |
-|------|-----------|
-| Backend | Java 17 · Spring Boot 3.x · Spring Security + JWT · Spring Data JPA · Flyway · SpringDoc (Swagger) |
-| Base de datos | PostgreSQL 14+ (con perfil alternativo `h2` en memoria) |
-| Frontend | React 18 · TypeScript · Vite · CSS Modules |
-| Monorepo | npm + [`concurrently`](https://www.npmjs.com/package/concurrently) (scripts raíz) |
+---
 
-## Requisitos previos
+## Estado del proyecto (por módulo)
 
-- **JDK 17** — el backend usa el Maven wrapper (`mvnw` / `mvnw.cmd`), no es necesario instalar Maven.
-- **Node.js 18+** — y npm.
-- **PostgreSQL 14+** corriendo localmente.
-  - ¿No tienes PostgreSQL instalado? Usa el perfil `h2` en memoria del backend (ver [Plan B](#plan-b-sin-postgresql)).
+| Módulo | Notas |
+|--------|-------|
+| **Infraestructura** (Spring Boot, Maven, Flyway, perfiles) | Perfil `postgres` (default) y `h2` (plan B sin PostgreSQL); esquema completo versionado |
+| **Esquema de BD completo** (users, products, carts, cart_items, orders, order_items, payments) | [`V1__init.sql`](backend/src/main/resources/db/migration/V1__init.sql) + seed demo en [`V2__seed.sql`](backend/src/main/resources/db/migration/V2__seed.sql) |
+| **Auth** (registro, login, JWT, perfil propio) | Endpoints `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/users/me`, `PUT /api/users/me` |
+| **Seguridad** (Spring Security, roles, filtros JWT, errores 401/403) | Política de rutas por rol en [`SecurityConfig.java`](backend/src/main/java/com/ingesoft/shop/config/SecurityConfig.java) |
+| **Excepciones globales** (contrato de error `ApiError` + `ErrorCode`) | [`GlobalExceptionHandler.java`](backend/src/main/java/com/ingesoft/shop/exception/GlobalExceptionHandler.java) |
+| **Documentación** (arquitectura, API, ADRs, SOLID/DRY) | Carpeta [`docs/`](docs) |
+
+---
+
+## Documentación
+
+| Documento | Contenido |
+|-----------|-----------|
+| [docs/arquitectura.md](docs/arquitectura.md) | Visión de conjunto, capas, flujo de una petición, estado por módulo |
+| [docs/api.md](docs/api.md) | Endpoints implementados (Auth, Users), contrato de errores, credenciales demo |
+| [docs/decisiones-adr.md](docs/decisiones-adr.md) | Decisiones de arquitectura registradas (ADR-001 … ADR-010) |
+| [docs/solid-dry.md](docs/solid-dry.md) | Evidencias de principios SOLID y DRY en el código implementado |
+
+Documentación interactiva de la API (Swagger UI, disponible al ejecutar el backend):
+<http://localhost:8080/swagger-ui.html>
+
+---
+
+## Stack tecnológico
+
+### Backend
+
+| Tecnología | Versión | Propósito |
+|------------|---------|-----------|
+| Java | 17 | Lenguaje del backend |
+| Spring Boot | 3.5.x | Framework principal |
+| Spring Security | 6.x (gestionado) | Autenticación JWT, roles, política de rutas |
+| Spring Data JPA | 3.x (gestionado) | Persistencia (Hibernate) |
+| Bean Validation | 3.x (gestionado) | Validación de entrada en DTOs (`@Valid`) |
+| JJWT | 0.12.7 | Emisión y validación de tokens JWT (HS256) |
+| Flyway | 10.x (gestionado) | Migraciones versionadas del esquema |
+| PostgreSQL | 15+ | Base de datos local (perfil por defecto) |
+| H2 | 2.x (runtime) | Base de datos embebida (perfil `h2`, plan B para máquinas sin PostgreSQL) |
+| SpringDoc OpenAPI | 2.10.0 | Swagger UI / OpenAPI |
+| Checkstyle | 10.26.1 | Linter, corrió en fase `validate` de Maven |
+| JUnit 5 + Mockito | (test) | Pruebas unitarias |
+| spring-security-test | (test) | Pruebas de contrato de API con MockMvc |
+
+### Frontend (en desarrollo)
+
+| Tecnología | Propósito |
+|------------|-----------|
+| React | UI (pendiente de inicializar en [`frontend/`](frontend)) |
+
+### Raíz del monorepo
+
+| Herramienta | Propósito |
+|-------------|-----------|
+| Node.js ≥ 18 + `concurrently` | Script `npm run dev` que levanta backend y frontend a la vez |
+
+---
 
 ## Estructura del proyecto
 
 ```
 Arquitectura_E-commerce_Ingesoft-II/
-├── package.json
-├── README.md
-├── backend/                      # Spring Boot + Maven
-│   ├── pom.xml
-│   ├── mvnw, mvnw.cmd
-│   └── src
-│       ├── main
-│       │   ├── java/com/ingesoft/shop
-│       │   │   ├── config/
-│       │   │   ├── controller/
-│       │   │   ├── dto/
-│       │   │   ├── exception/
-│       │   │   ├── security/
-│       │   │   ├── service/
-│       │   │   │   └── payment/
-│       │   │   ├── repository/
-│       │   │   ├── entity/
-│       │   │   └── enums/
-│       │   └── resources
-│       │       ├── application.yml
-│       │       └── db/migration/
-│       └── test                  # pruebas unitarias e integracion
-├── frontend/                     # React 18 + Vite + TypeScript
-│   ├── src
-│   │   ├── api/
-│   │   ├── components/
-│   │   ├── context/
-│   │   ├── hooks/
-│   │   ├── pages/
-│   │   ├── pages/admin/
-│   │   └── types/
-│   └── ...
-├── scripts/
-├── docs/
-│   ├── arquitectura.md           # documento de arquitectura
-│   ├── decisiones-adr.md         # registros de decisiones
-│   ├── solid-dry.md              # evidencias por principio
-│   └── api.md                    # guia de endpoints
-└── .env/
+├── package.json                  # Scripts del monorepo (npm run dev)
+├── LICENSE
+├── README.md                     # Este archivo
+├── docs/                         # Documentación del proyecto
+│   ├── api.md
+│   ├── arquitectura.md
+│   ├── decisiones-adr.md
+│   └── solid-dry.md
+├── scripts/                      # Scripts auxiliares (por definir)
+│   └── .gitkeep
+├── frontend/                     # Frontend React (por implementar)
+│   └── .gitkeep
+└── backend/
+    ├── mvnw / mvnw.cmd           # Maven Wrapper
+    ├── pom.xml
+    ├── checkstyle.xml            # Reglas del linter
+    ├── .mvn/                     # Config del Maven Wrapper
+    └── src/
+        ├── main/
+        │   ├── java/com/ingesoft/shop/
+        │   │   ├── ShopApplication.java            # Punto de entrada Spring Boot
+        │   │   ├── config/
+        │   │   │   ├── CorsConfig.java             # CORS para el frontend (localhost:5173)
+        │   │   │   └── SecurityConfig.java         # Política de rutas y roles, BCrypt, 401/403
+        │   │   ├── controller/
+        │   │   │   ├── AuthController.java
+        │   │   │   └── UserController.java
+        │   │   ├── dto/
+        │   │   │   ├── request/
+        │   │   │   │   ├── LoginRequest.java
+        │   │   │   │   ├── RegisterRequest.java
+        │   │   │   │   └── UpdateProfileRequest.java
+        │   │   │   └── response/
+        │   │   │       ├── LoginResponse.java
+        │   │   │       └── UserResponse.java
+        │   │   ├── entity/
+        │   │   │   └── User.java
+        │   │   ├── enums/
+        │   │   │   ├── OrderStatus.java
+        │   │   │   ├── PaymentStatus.java
+        │   │   │   └── Role.java
+        │   │   ├── exception/
+        │   │   │   ├── ApiError.java
+        │   │   │   ├── BusinessException.java
+        │   │   │   ├── ErrorCode.java
+        │   │   │   └── GlobalExceptionHandler.java
+        │   │   ├── repository/
+        │   │   │   └── UserRepository.java
+        │   │   ├── security/
+        │   │   │   ├── AppUserDetailsService.java
+        │   │   │   ├── JwtAuthFilter.java
+        │   │   │   └── JwtTokenProvider.java(HS256)
+        │   │   └── service/
+        │   │       ├── IAuthService.java
+        │   │       └── impl/
+        │   │           └── AuthServiceImpl.java
+        │   └── resources/
+        │       ├── application.yml
+        │       └── db/migration/
+        │           ├── V1__init.sql
+        │           └── V2__seed.sql
+        └── test/
 ```
 
-## Arranque
+---
 
-### 1. Base de datos
+## Requisitos previos
 
-Crea la base de datos local `shop`:
+| Herramienta | Versión mínima | Notas |
+|-------------|----------------|-------|
+| JDK | 17 | Se recomienda 17 LTS o superior |
+| Maven | 3.8+ | **No es necesario instalarlo**: el proyecto incluye `mvnw` / `mvnw.cmd` (Maven Wrapper) |
+| Node.js | ≥ 18 | Solo para el script raíz `npm run dev` (concurrently). El frontend aún no está implementado |
+| PostgreSQL | 15+ | **Requerida** para el perfil por defecto. Sin PostgreSQL use el perfil `h2` (plan B, ver [Ejecución](#ejecución)) |
+
+### Base de datos (perfil por defecto: `postgres`)
+
+Cree la base de datos local:
 
 ```sql
 CREATE DATABASE shop;
 ```
 
-El esquema y los datos de ejemplo los crea **Flyway** automáticamente al arrancar el backend (`V1__init.sql` + `V2__seed.sql`); no hay que ejecutar scripts manualmente.
+Las credenciales de conexión están fijadas en
+[`application.yml`](backend/src/main/resources/application.yml)
+(usuario `postgres`, contraseña `admin`, host `localhost:5432`): Las cuales seran cambiadas eventualmente a variables de entorno para mayor seguridad.
 
-### 2. Instalar dependencias
+El resto (tablas, índices, datos demo) lo crea **Flyway automáticamente** al
+iniciar el backend: no hay scripts manuales que ejecutar.
 
-```bash
-# Raíz: scripts de desarrollo
-npm install
+> ¿Sin PostgreSQL? Use el perfil `h2` (base de datos embebida en memoria con
+> `MODE=PostgreSQL` y las mismas migraciones):
+> `mvnw.cmd spring-boot:run -Dspring-boot.run.profiles=h2`.
 
-# Backend: el Maven wrapper descarga las dependencias al compilar
-cd backend && mvnw.cmd -q compile   # Linux/macOS: ./mvnw -q compile
+### Variables de entorno
 
-# Frontend
-cd frontend && npm install
-```
+[`application.yml`](backend/src/main/resources/application.yml) expone un único
+placeholder de entorno (convención `${VAR:default}`):
 
-### 3. Ejecutar
+| Variable | Default | Descripción |
+|----------|---------|-------------|
+| `JWT_SECRET` | placeholder de desarrollo (64+ chars) | Clave HMAC-SHA256 con que se firman los tokens JWT. **Debe exportarse un valor propio en cualquier entorno que no sea desarrollo local** |
 
-**Opción A — todo junto desde la raíz** (backend y frontend en paralelo):
+El resto de la configuración (datasource, expiración del token de 2 h,
+parámetros del checkout) está fijada directamente en el `application.yml`.
 
-```bash
-npm run dev
-```
+---
 
-**Opción B — en terminales separadas:**
+## Ejecución
 
-```bash
-npm run backend   # API en http://localhost:8080
-npm run frontend  # SPA en  http://localhost:5173
-```
-
-| Servicio | URL |
-|----------|-----|
-| Frontend | <http://localhost:5173> |
-| Backend (API) | <http://localhost:8080> |
-| Swagger UI | <http://localhost:8080/swagger-ui.html> |
-
-## Plan B: sin PostgreSQL
-
-Si no hay PostgreSQL disponible (p. ej. máquina de sustentación), arranca el backend con el perfil `h2` en memoria:
+### 1. Backend
 
 ```bash
 cd backend
-mvnw.cmd spring-boot:run -Dspring-boot.run.arguments=--spring.profiles.active=h2
 ```
 
-- Flyway migra igualmente (`V1` + `V2`), así que el esquema y el seed existen igual.
-- Los datos se pierden al detener la aplicación (BD en memoria).
+**Opción A — Perfil `postgres` (default, requiere PostgreSQL local):**
+
+```bash
+# Windows (cmd)
+mvnw.cmd spring-boot:run
+# Linux / macOS
+./mvnw spring-boot:run
+```
+
+**Opción B — Perfil `h2` (plan B, sin PostgreSQL):**
+
+```bash
+# Windows (cmd)
+mvnw.cmd spring-boot:run -Dspring-boot.run.profiles=h2
+# Linux / macOS
+./mvnw spring-boot:run -Dspring-boot.run.profiles=h2
+```
+
+El backend queda disponible en <http://localhost:8080>.
+Swagger UI: <http://localhost:8080/swagger-ui.html>.
+
+### 2. Frontend
+
+⏳ **Aún no implementado.** Cuando exista código en [`frontend/`](frontend),
+la intención es:
+
+```bash
+cd frontend
+npm install
+npm run dev   # Vite → http://localhost:5173
+```
+
+### 3. Todo junto (script raíz)
+
+```bash
+npm install   # una sola vez
+npm run dev   # levanta backend y frontend con concurrently
+```
+
+> Mientras `frontend/` esté vacío, `npm run dev` falla en el proceso
+> `frontend` (no hay `package.json`); el backend sí arranca.
+
+### Pruebas
+
+```bash
+cd backend
+mvnw.cmd test     # Windows
+./mvnw test       # Linux/macOS
+```
+
+> El linter **Checkstyle** corre automáticamente en la fase `validate` de
+> Maven (ver [backend/pom.xml](backend/pom.xml)): cualquier build o test falla
+> si el código viola [checkstyle.xml](backend/checkstyle.xml).
+
+---
 
 ## Credenciales demo (seed)
 
-Usuarios insertados por `V2__seed.sql`:
+El seed [`V2__seed.sql`](backend/src/main/resources/db/migration/V2__seed.sql)
+inserta de forma determinista (hashes BCrypt precomputados):
 
 | Rol | Email | Contraseña |
-|-----|-------|------------|
+|-----|-------|-----------|
 | Administrador | `admin@demo.com` | `Admin123!` |
 | Usuario | `user@demo.com` | `User123!` |
 
-El seed incluye además 8 productos de ejemplo (uno con stock bajo, para demostrar `INSUFFICIENT_STOCK`).
+También se insertan 8 productos demo (precios en COP, uno con stock bajo para
+probar `INSUFFICIENT_STOCK` en el futuro módulo de carrito).
 
-## Pruebas
+---
 
-```bash
-# Backend (JUnit 5 + Mockito + Testcontainers/integración)
-cd backend && mvnw.cmd test
+## Endpoints implementados
 
-# Frontend
-cd frontend && npm test
-```
+| Método | Ruta | Autenticación | Descripción |
+|--------|------|---------------|-------------|
+| `POST` | `/api/auth/register` | No | Registrar usuario (siempre rol `USER`) |
+| `POST` | `/api/auth/login` | No | Iniciar sesión → devuelve token JWT + datos del usuario |
+| `GET` | `/api/users/me` | JWT | Datos del usuario autenticado |
+| `PUT` | `/api/users/me` | JWT | Actualizar nombre, email y/o contraseña |
 
-## Documentación y entregables
+Detalle completo (bodies, códigos de error, ejemplos) en
+[docs/api.md](docs/api.md).
 
-| Entregable | Ubicación |
-|-----------|-----------|
-| Código backend | [`backend/`](backend/) |
-| Código frontend | [`frontend/`](frontend/) |
-| Arquitectura | `docs/arquitectura.md` |
-| Decisiones técnicas (ADR) | `docs/decisiones-adr.md` |
-| Evidencias SOLID/DRY | `docs/solid-dry.md` |
-| Documentación de API | `docs/api.md` + Swagger UI en `/swagger-ui.html` |
-| Pruebas ejecutables | `backend/src/test`, `frontend/src/**/tests` |
-| README de arranque | este archivo |
+---
 
-> El enunciado de la prueba técnica vive en `.env/` y **no debe modificarse**.
+## Licencia
+
+Véase [LICENSE](LICENSE).
