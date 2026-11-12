@@ -2,10 +2,11 @@
 
 Este documento mapea cada principio a **fragmentos de código real ya implementado**
 en el módulo de autenticación/usuarios (R1), en el catálogo de productos (R2/R5),
-en el carrito de compras (R3/R4) y en la infraestructura de seguridad y errores.
-Cada principio indica **dónde** se aplica, **por qué** y **qué gana** el
-proyecto. Los elementos de los módulos aún en desarrollo (Checkout, Órdenes)
-se citan como *pendientes* y se evidenciarán aquí cuando se implementen.
+en el carrito de compras (R3/R4), en el checkout con pago simulado (R3/R4) y en
+la infraestructura de seguridad y errores. Cada principio indica **dónde** se
+aplica, **por qué** y **qué gana** el proyecto. Los elementos del módulo de
+órdenes (aún en desarrollo) se citan como *pendientes* y se evidenciarán aquí
+cuando se implemente.
 
 > Convención de enlaces: los archivos se enlazan con su ruta relativa al
 > monorepo. Los fragmentos son extractos literales de la fuente (se recortan
@@ -144,6 +145,27 @@ Si mañana cambia el verbo HTTP, el formato del JSON o la estrategia de
 precios del carrito, cada cambio toca **una** capa: la presentacional o el
 servicio, nunca las dos.
 
+### 7. El checkout separa traducción HTTP, orquestación del pago y pasarela
+
+[`CheckoutController.java`](../backend/src/main/java/com/ingesoft/shop/controller/CheckoutController.java)
+solo resuelve **quién** compra (el email del token) y traduce HTTP → DTO;
+[`CheckoutServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/CheckoutServiceImpl.java)
+concentra el flujo completo (bloqueo de ítems, re-validación de stock, orden,
+descuento y vaciado del carrito); [`PaymentServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/PaymentServiceImpl.java)
+orquesta el intento de pago y su persistencia; y
+[`SimulatedPaymentProvider.java`](../backend/src/main/java/com/ingesoft/shop/service/payment/SimulatedPaymentProvider.java)
+es la **única** clase que decide cuándo el pago simulado se confirma o se
+rechaza. Cuatro clases, cuatro razones para cambiar.
+
+```java
+@PostMapping
+public ResponseEntity<OrderResponse> checkout(Authentication authentication,
+        @Valid @RequestBody CheckoutRequest request) {
+    OrderResponse order = checkoutService.checkout(authentication.getName(), request);
+    return ResponseEntity.status(HttpStatus.CREATED).body(order);
+}
+```
+
 ---
 
 ## O — Open/Closed
@@ -183,9 +205,20 @@ ORDER_STATUS_INVALID(HttpStatus.CONFLICT);       /** 409: transicion de estado d
 
 ### 3. Un gateway de pago real será una nueva clase
 
-*Pendiente (módulo Checkout):* el pago se abstracte tras `IPaymentProvider`.
-Conectar un gateway real es implementar esa interfaz en una **nueva** clase;
-`CheckoutService` y `PaymentService` no se modifican. (Ver ADR-007.)
+**Ya implementado:** el pago se abstracta tras
+[`IPaymentProvider`](../backend/src/main/java/com/ingesoft/shop/service/payment/IPaymentProvider.java)
+(un solo método: `pay`), hoy implementada por
+[`SimulatedPaymentProvider`](../backend/src/main/java/com/ingesoft/shop/service/payment/SimulatedPaymentProvider.java).
+Conectar un gateway real (MercadoPago, Stripe, …) es implementar esa interfaz
+en una **nueva** clase y registrarla como Bean: `PaymentServiceImpl` y
+`CheckoutServiceImpl` no se modifican. (Ver ADR-007 y ADR-015.)
+
+```java
+public interface IPaymentProvider {
+
+    PaymentResult pay(BigDecimal amount, PaymentData paymentData);
+}
+```
 
 ### 4. El listado admin reutiliza la misma consulta sin modificar la pública
 
@@ -255,6 +288,15 @@ Tanto `ProductServiceImpl` como `ProductAdminServiceImpl` dependen de esa
 interfaz, de modo que en tests puede sustituirse por un **mock** sin alterar
 ningún servicio del catálogo.
 
+### 5. `SimulatedPaymentProvider` es sustituible por cualquier `IPaymentProvider`
+
+[`SimulatedPaymentProvider.java`](../backend/src/main/java/com/ingesoft/shop/service/payment/SimulatedPaymentProvider.java)
+es un `@Component` ordinario que cumple el contrato de
+[`IPaymentProvider`](../backend/src/main/java/com/ingesoft/shop/service/payment/IPaymentProvider.java)
+devolviendo siempre un `PaymentResult` (confirmado o fallido). `PaymentServiceImpl`
+lo usa sin conocer que es simulado: en tests se sustituye por un **mock** (o por
+un gateway real) sin alterar ninguna línea del servicio.
+
 ---
 
 ## I — Interface Segregation
@@ -280,8 +322,25 @@ del catálogo público conocen operaciones de administración.
 expone exactamente los **4** métodos del módulo de carrito (`get`, `add`,
 `updateQuantity`, `remove`). `CartController` no conoce repositorios,
 entidades ni la regla de stock: depende solo de esta interfaz pequeña, y el
-futuro módulo de Checkout no la contaminará con sus propios métodos (tendrá
-su propio `ICheckoutService`).
+módulo de Checkout no la contaminó con sus propios métodos.
+
+**Ya implementado:** el checkout tiene **tres** interfaces pequeñas y
+específicas, de **1 método cada una**:
+[`ICheckoutService`](../backend/src/main/java/com/ingesoft/shop/service/ICheckoutService.java)
+(`checkout`), [`IPaymentService`](../backend/src/main/java/com/ingesoft/shop/service/IPaymentService.java)
+(`process`) e
+[`IPaymentProvider`](../backend/src/main/java/com/ingesoft/shop/service/payment/IPaymentProvider.java)
+(`pay`). `CheckoutController` depende solo de `ICheckoutService`;
+`CheckoutServiceImpl` depende solo de `IPaymentService`; y
+`PaymentServiceImpl` depende solo de `IPaymentProvider`. Ninguna clase conoce
+métodos que no usa, y la pasarela no conoce el resto del dominio.
+
+```java
+public interface ICheckoutService {
+
+    OrderResponse checkout(String email, CheckoutRequest request);
+}
+```
 
 ### 2. `UserRepository` solo expone las consultas del dominio
 
@@ -375,6 +434,36 @@ public CartController(ICartService cartService) {
     this.cartService = cartService;
 }
 ```
+
+### 6. El checkout depende de `ICheckoutService`, `IPaymentService` e `IPaymentProvider`
+
+[`CheckoutController.java`](../backend/src/main/java/com/ingesoft/shop/controller/CheckoutController.java)
+recibe `ICheckoutService` por constructor.
+[`CheckoutServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/CheckoutServiceImpl.java)
+depende de cinco interfaces de repositorio, de `IPaymentService` (interfaz) y
+de `TransactionTemplate` (API de Spring): no `new` ninguna dependencia.
+
+```java
+public CheckoutServiceImpl(UserRepository userRepository,
+        ProductRepository productRepository,
+        CartRepository cartRepository,
+        CartItemRepository cartItemRepository,
+        OrderRepository orderRepository,
+        IPaymentService paymentService,
+        TransactionTemplate transactionTemplate) {
+    this.userRepository = userRepository;
+    this.productRepository = productRepository;
+    this.cartRepository = cartRepository;
+    this.cartItemRepository = cartItemRepository;
+    this.orderRepository = orderRepository;
+    this.paymentService = paymentService;
+    this.transactionTemplate = transactionTemplate;
+}
+```
+
+La cadena completa es de alto a bajo nivel: `CheckoutController` →
+`ICheckoutService` → `IPaymentService` → `IPaymentProvider`; cada flecha es una
+interfaz, por lo que cada eslabón se maqueta por separado en tests.
 
 ---
 
@@ -513,15 +602,87 @@ public static CartResponse from(Cart cart) {
 Si cambia el contrato de salida del carrito, se editan dos métodos, no cuatro
 endpoints.
 
+### 9. El mapeo de la orden entidad → respuesta se define una sola vez
+
+[`OrderResponse.from(Order)`](../backend/src/main/java/com/ingesoft/shop/dto/response/OrderResponse.java)
+y [`ItemResponse.from(OrderItem)`](../backend/src/main/java/com/ingesoft/shop/dto/response/OrderResponse.java)
+son los **únicos** puntos que convierten la orden y sus ítems al contrato de
+salida: el checkout no construye JSON a mano y el futuro módulo de órdenes
+reutilizará el mismo `from`. El **lineal** de cada ítem tampoco se multiplica
+a mano: lo deriva `OrderItem.lineTotal()`, igual que
+`CartItem.lineTotal()` en el carrito.
+
+```java
+public static OrderResponse from(Order order) {
+    List<ItemResponse> items = order.getItems().stream()
+            .map(ItemResponse::from)
+            .toList();
+    return new OrderResponse(order.getId(), order.getOrderNumber(), order.getStatus(),
+            order.getSubtotal(), order.getShipping(), order.getTotal(),
+            order.getShippingAddress(), order.getCreatedAt(), items);
+}
+```
+
+### 10. El resultado de pago se construye con dos fábricas, no con tres `new`
+
+[`PaymentResult.confirmed(...)`](../backend/src/main/java/com/ingesoft/shop/service/payment/PaymentResult.java)
+y [`PaymentResult.failed(...)`](../backend/src/main/java/com/ingesoft/shop/service/payment/PaymentResult.java)
+son la **única** forma de construir un resultado de pago: los proveedores
+(simulado y futuros) nunca arman el record a mano, de modo que el invariante
+"confirmado ⇒ `transactionId`, fallido ⇒ `failureReason`" vive en un solo
+lugar.
+
+```java
+public static PaymentResult confirmed(String transactionId) {
+    return new PaymentResult(PaymentStatus.CONFIRMED, transactionId, null);
+}
+
+public static PaymentResult failed(String failureReason) {
+    return new PaymentResult(PaymentStatus.FAILED, null, failureReason);
+}
+```
+
+### 11. El nombre del proveedor de pago se deriva, no se repite
+
+En [`PaymentServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/PaymentServiceImpl.java)
+el campo `provider` de `payments` **no** se hardcodea: se deriva del nombre
+de la clase del Bean inyectado. Agregar un gateway `MercadoPagoProvider`
+actualiza el valor guardado sin editar el servicio.
+
+```java
+private String providerName() {
+    String simpleName = paymentProvider.getClass().getSimpleName();
+    int separator = simpleName.indexOf("PaymentProvider");
+    String base = separator > 0 ? simpleName.substring(0, separator) : simpleName;
+    return base.toUpperCase();
+}
+```
+
+### 12. La re-validación de stock reutiliza `ErrorCode`, no duplica mensajes
+
+El checkout no inventa nuevos estados HTTP: reutiliza `CART_EMPTY`,
+`PRODUCT_NOT_FOUND` y `INSUFFICIENT_STOCK` del enum
+[`ErrorCode`](../backend/src/main/java/com/ingesoft/shop/exception/ErrorCode.java),
+de modo que el contrato de errores del carrito y el del checkout comparten la
+misma fuente (y `GlobalExceptionHandler` no se toca).
+
+```java
+if (item.getQuantity() > product.getStock()) {
+    throw new BusinessException(ErrorCode.INSUFFICIENT_STOCK, String.format(
+            "El producto '%s' no tiene suficiente stock (disponible: %d, solicitado: %d)",
+            product.getName(), product.getStock(), item.getQuantity()));
+}
+```
+
 ---
 
 ## Matriz resumen
 
-| Principio | Auth (R1) | Catálogo (R2/R5) | Carrito (R3/R4) | Pendiente |
-|-----------|-----------|------------------|------------------|-----------|
-| S | ✔ controlador/servicio/JWT/errores | ✔ controladores por rol, servicios de lectura/escritura | ✔ controlador traduce, servicio concentra reglas de stock | Checkout, Órdenes |
-| O | ✔ métodos nuevos en `IAuthService`, `ErrorCode` | ✔ flag `onlyAvailable` en `findCatalogPage` | ✔ `INSUFFICIENT_STOCK`/`NOT_FOUND` reutilizados sin tocar el handler | Gateway `IPaymentProvider` |
-| L | ✔ repositorios, `PasswordEncoder` | ✔ `ProductRepository` sustituible | ✔ `CartRepository`/`CartItemRepository` mockeables | — |
-| I | ✔ `IAuthService` | ✔ `IProductService` / `IProductAdminService` | ✔ `ICartService` (4 métodos) | — |
-| D | ✔ inyección por constructor | ✔ inyección por constructor | ✔ inyección por constructor | — |
-| DRY | ✔ `UserResponse.from`, `ErrorCode`, `ApiError` | ✔ `ProductResponse.from`, `ProductRequest` | ✔ `CartResponse.from`, `Cart.getSubtotal()` | — |
+| Principio | Auth (R1) | Catálogo (R2/R5) | Carrito (R3/R4) | Checkout (R3/R4) | Pendiente |
+|-----------|-----------|------------------|------------------|------------------|-----------|
+| S | ✔ controlador/servicio/JWT/errores | ✔ controladores por rol, servicios de lectura/escritura | ✔ controlador traduce, servicio concentra reglas de stock | ✔ controlador traduce; checkout/pago/pasarela separados | Órdenes |
+| O | ✔ métodos nuevos en `IAuthService`, `ErrorCode` | ✔ flag `onlyAvailable` en `findCatalogPage` | ✔ `INSUFFICIENT_STOCK`/`NOT_FOUND` reutilizados sin tocar el handler | ✔ gateway real = nueva clase tras `IPaymentProvider` (ADR-015) | — |
+| L | ✔ repositorios, `PasswordEncoder` | ✔ `ProductRepository` sustituible | ✔ `CartRepository`/`CartItemRepository` mockeables | ✔ `SimulatedPaymentProvider` sustituible por cualquier `IPaymentProvider` | — |
+| I | ✔ `IAuthService` | ✔ `IProductService` / `IProductAdminService` | ✔ `ICartService` (4 métodos) | ✔ `ICheckoutService`, `IPaymentService`, `IPaymentProvider` (1 método c/u) | — |
+| D | ✔ inyección por constructor | ✔ inyección por constructor | ✔ inyección por constructor | ✔ cadena de interfaces + `TransactionTemplate` inyectada | — |
+| DRY | ✔ `UserResponse.from`, `ErrorCode`, `ApiError` | ✔ `ProductResponse.from`, `ProductRequest` | ✔ `CartResponse.from`, `Cart.getSubtotal()` | ✔ `OrderResponse.from`, fábricas `PaymentResult`, `providerName()` | — |

@@ -14,8 +14,8 @@ Tienda online con autenticación por roles (usuario/administrador), gestión CRU
 |---|---------------|--------------------|-----------|--------|
 | R1 | Autenticación y gestión de usuarios segura | `backend: auth` (JWT + BCrypt) | Endpoints `/api/auth/*`, `/api/users/me` | Implementado |
 | R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` con `@PreAuthorize("hasRole('ADMIN')")`; `orders` pendiente | Endpoints `/api/admin/products/**` (CRUD + stock) | Parcial (órdenes pendiente) |
-| R3 | Carrito y checkout fluidos | `backend: cart` (carrito persistente con validación de stock) + `checkout` pendiente; `frontend: cart` pendiente | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}` | Parcial (carrito implementado; checkout pendiente) |
-| R4 | Validaciones de stock y pagos | `CartServiceImpl` valida stock en agregar/actualizar (`INSUFFICIENT_STOCK`); pago pendiente en `CheckoutService` transaccional | Endpoints de carrito + código `INSUFFICIENT_STOCK` | Parcial (stock en carrito implementado; pago pendiente) |
+| R3 | Carrito y checkout fluidos | `backend: cart` (carrito persistente con validación de stock) + `backend: checkout` (`POST /api/checkout` transaccional con pago simulado); `frontend: cart/checkout` pendiente | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`, `POST /api/checkout` | Parcial (backend de carrito y checkout implementado; frontend pendiente) |
+| R4 | Validaciones de stock y pagos | `CartServiceImpl` valida stock en agregar/actualizar; `CheckoutServiceImpl` re-valida stock bajo bloqueo pesimista (`INSUFFICIENT_STOCK`, `CART_EMPTY`) y procesa el pago simulado (`PAYMENT_DECLINED` → orden `PENDING`) | Endpoints de carrito y de checkout + códigos `INSUFFICIENT_STOCK`, `CART_EMPTY`, `PAYMENT_DECLINED` | Implementado (backend) |
 | R5 | Interfaz clara de productos y detalles | `backend: catalog` (catálogo público); `frontend: catalog` pendiente | Endpoints `GET /api/products`, `GET /api/products/{id}` | Parcial (frontend pendiente) |
 
 ### 1.2 Criterios de evaluación → estrategia
@@ -201,6 +201,7 @@ Base URL: `http://localhost:8080/api`. La referencia completa por endpoint con e
 | Products | `GET /products`, `GET /products/{id}` | Público |
 | Products (admin) | `GET/POST /admin/products`, `PUT/DELETE /admin/products/{id}`, `PATCH /admin/products/{id}/stock` | Admin |
 | Cart | `GET /cart`, `POST /cart/items`, `PATCH /cart/items/{itemId}`, `DELETE /cart/items/{itemId}` | Usuario |
+| Checkout | `POST /checkout` | Usuario |
 | Docs | `/swagger-ui.html` | Público |
 
 **Formato de error estándar** (todo el backend responde igual):
@@ -220,18 +221,18 @@ Códigos de negocio: `EMAIL_ALREADY_REGISTERED`, `INVALID_CREDENTIALS`, `PRODUCT
 
 | Principio | Ejemplo en el proyecto | Elemento |
 |-----------|------------------------|----------|
-| **S**ingle Responsibility | `AuthController` solo traduce HTTP → DTO; `AuthServiceImpl` concentra las reglas de negocio; `JwtTokenProvider` solo emite/valida tokens; `CartServiceImpl` concentra las reglas del carrito (stock, acumulación, subtotal); | `AuthController`, `AuthServiceImpl`, `JwtTokenProvider`, `CartServiceImpl` |
-| **O**pen/Closed | `ErrorCode` crece por adición sin tocar el handler;| `ErrorCode`;|
+| **S**ingle Responsibility | `AuthController` solo traduce HTTP → DTO; `AuthServiceImpl` concentra las reglas de negocio; `JwtTokenProvider` solo emite/valida tokens; `CartServiceImpl` concentra las reglas del carrito (stock, acumulación, subtotal); `CheckoutServiceImpl` orquesta el flujo de compra; `PaymentServiceImpl` solo persiste el intento de pago; | `AuthController`, `AuthServiceImpl`, `JwtTokenProvider`, `CartServiceImpl`, `CheckoutServiceImpl`, `PaymentServiceImpl` |
+| **O**pen/Closed | `ErrorCode` crece por adición sin tocar el handler; `SimulatedPaymentProvider` se añade tras `IPaymentProvider` sin modificar `PaymentServiceImpl` (cambiar de pasarela = nueva implementación);| `ErrorCode`, `IPaymentProvider`, `SimulatedPaymentProvider` |
 | **L**iskov Substitution | `UserRepository` (Spring Data) es mockeable y `AuthServiceImpl` cumple el contrato completo;| `UserRepository`, `AuthServiceImpl`;|
-| **I**nterface Segregation | `IAuthService` (4 métodos de auth/perfil), `ICartService` (4 métodos de carrito) y `UserRepository` (2 consultas) son interfaces pequeñas y específicas;| `IAuthService`, `ICartService`, `UserRepository` |
-| **D**ependency Inversion | Inyección por constructor en `AuthController` → `IAuthService` → `UserRepository`/`PasswordEncoder` (interfaz); `SecurityConfig` inyecta `JwtAuthFilter`| Todo el backend |
+| **I**nterface Segregation | `IAuthService` (4 métodos de auth/perfil), `ICartService` (4 métodos de carrito), `ICheckoutService` (1 método), `IPaymentService` (1 método) y `IPaymentProvider` (1 método) son interfaces pequeñas y específicas;| `IAuthService`, `ICartService`, `ICheckoutService`, `IPaymentService`, `IPaymentProvider` |
+| **D**ependency Inversion | Inyección por constructor en `AuthController` → `IAuthService` → `UserRepository`/`PasswordEncoder` (interfaz); `SecurityConfig` inyecta `JwtAuthFilter`; `CheckoutServiceImpl` se programa contra `IPaymentService`, `TransactionTemplate` y repositorios (sin conocer a `SimulatedPaymentProvider`) | Todo el backend |
 
-> Evidencias con fragmentos de código real: [`solid-dry.md`](solid-dry.md) — cubre los módulos implementados (Auth, Users, Catálogo, Carrito, Seguridad y manejo de errores);
+> Evidencias con fragmentos de código real: [`solid-dry.md`](solid-dry.md) — cubre los módulos implementados (Auth, Users, Catálogo, Carrito, Checkout/Pagos, Seguridad y manejo de errores);
 
 ## 8. Manejo de errores y calidad
 
 - **Backend:** `@ControllerAdvice` global → excepciones de negocio (`BusinessException` con código) mapeadas al formato; `400` para validación, `401/403` para seguridad, `404` para no encontrado, `409` para conflictos de stock/estado, `402` para pago rechazado.
-- **Transaccionalidad:** `@Transactional` en operaciones que tocan stock+orden+pago; rollback automático ante cualquier excepción.
+- **Transaccionalidad:** `@Transactional` en operaciones que tocan stock+orden+pago (p. ej. `PaymentServiceImpl`); el checkout usa `TransactionTemplate` para delimitar el programa-todo-o-nada y lanzar el `402 PAYMENT_DECLINED` **fuera** de la transacción (la orden `PENDING` y el pago `FAILED` sí se persisten). Rollback automático ante cualquier excepción de negocio.
 - **Frontend:** interceptores centralizados de Axios, estados de carga/error/vacío en cada página de listado, mensajes de error del backend mostrados textualmente.
 - **Linters:** Checkstyle (backend, **ya activo** en la fase `validate` del build) + ESLint + Prettier.
 
@@ -252,7 +253,7 @@ Cada test documenta **arrangement–action–assertion** y el requerimiento que 
 | Riesgo | Mitigación |
 |--------|-----------|
 | PostgreSQL no instalado en la máquina de sustentación | Perfil `h2` en memoria (`--spring.profiles.active=h2`), **ya configurado** en `application.yml` y con H2 en `pom.xml` |
-| Sobreventa por compras concurrentes | `SELECT ... FOR UPDATE` en checkout + test de concurrencia |
+| Sobreventa por compras concurrentes | Bloqueo pesimista **implementado**: `findByCartIdForUpdate` y `findByIdForUpdate` (`PESSIMISTIC_WRITE`) en el checkout (ADR-015) + test de concurrencia pendiente |
 | Alcance que crece en la sustentación | El MVP está acotado a §1.1; mejoras (gateway real, Docker, despliegue) se documentan como roadmap en los ADR, no se implementan |
 | Diferencia de versiones JDK/Node | Maven wrapper en backend + `engines` en `package.json` + requisitos en README |
 

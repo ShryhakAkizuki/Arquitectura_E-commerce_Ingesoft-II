@@ -16,6 +16,7 @@ Registro de decisiones técnicas del proyecto.
 | ADR-012 | Checkstyle en la fase `validate` del build (falla el build ante violación) |
 | ADR-013 | Catálogo: lectura pública / gestión admin separadas, soft delete y stock absoluto |
 | ADR-014 | Carrito persistente único por usuario, precio capturado al agregar y cantidad acumulada |
+| ADR-015 | Checkout transaccional: bloqueos pesimistas, proveedor de pago simulado configurable y orden reintentable en `PENDING` |
 
 ---
 
@@ -177,7 +178,7 @@ Registro de decisiones técnicas del proyecto.
 - (+) La desactivación preserva la integridad referencial de las órdenes futuras y permite reactivar productos sin re-crearlos.
 - (+) Añadir un campo o una regla al catálogo no obliga a tocar el controlador público si es una regla de admin, y viceversa.
 - (−) `DELETE` no libera espacio en la tabla: los productos desactivados siguen ocupando filas (coste despreciable en la escala del MVP y necesario para el historial de órdenes).
-- (−) El stock absoluto descarta ajustes concurrentes tipo "quitar 1 unidad" (lo resolverá el checkout con decremento atómico al confirmar la orden, módulo pendiente).
+- (−) El stock absoluto descarta ajustes concurrentes tipo "quitar 1 unidad" (lo resuelve el checkout con el decremento del stock al confirmar la orden bajo bloqueo pesimista, ADR-015).
 
 ---
 
@@ -185,7 +186,7 @@ Registro de decisiones técnicas del proyecto.
 
 [`Cart.java`](../backend/src/main/java/com/ingesoft/shop/entity/Cart.java), [`CartItem.java`](../backend/src/main/java/com/ingesoft/shop/entity/CartItem.java), [`ICartService.java`](../backend/src/main/java/com/ingesoft/shop/service/ICartService.java), [`CartServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/CartServiceImpl.java), [`CartController.java`](../backend/src/main/java/com/ingesoft/shop/controller/CartController.java), [`CartRepository.java`](../backend/src/main/java/com/ingesoft/shop/repository/CartRepository.java), [`V1__init.sql`](../backend/src/main/resources/db/migration/V1__init.sql) (`carts`, `cart_items`)
 
-**Contexto:** R3 exige un carrito fluido y R4 validaciones de stock. El carrito debe sobrevivir recargas y reinicios (el usuario no pierde su selección), cada usuario debe tener a lo sumo **un** carrito, y el módulo de checkout (pendiente) debe poder re-validar precio y stock sin que el carrito haya envejecido mal.
+**Contexto:** R3 exige un carrito fluido y R4 validaciones de stock. El carrito debe sobrevivir recargas y reinicios (el usuario no pierde su selección), cada usuario debe tener a lo sumo **un** carrito, y el módulo de checkout debe poder re-validar precio y stock sin que el carrito haya envejecido mal (implementado en ADR-015).
 
 **Decisión:**
 - **Persistencia JPA, no sesion/cookie:** el carrito vive en `carts` (1:1 con `users`, `user_id` único) y `cart_items` (N:1 con `carts` y `products`). Se recupera por el email del token JWT, por lo que no depende de dispositivos ni de cookies.
@@ -200,7 +201,32 @@ Registro de decisiones técnicas del proyecto.
 **Consecuencias:**
 - (+) El carrito persiste entre sesiones y dispositivos; el estado de compra no depende del cliente.
 - (+) Sin columna de subtotal y sin duplicados de ítems: menos invariantes que mantener y menos superficie de bug.
-- (+) El checkout futuro solo debe re-validar `unit_price`/`stock` contra el producto actual y descontar atómicamente; el carrito ya le entrega precios y cantidades consistentes.
+- (+) El checkout (ADR-015) solo debe re-validar `unit_price`/`stock` contra el producto actual y descontar el stock de forma serializada; el carrito ya le entrega precios y cantidades consistentes.
 - (+) La restricción única de BD protege la invariant de un-ítem-por-producto incluso si un cambio de código la violara.
 - (−) El precio en el carrito puede quedar desfasado del precio vigente hasta que el checkout lo re-valide (comportamiento documentado, coherente con ADR-008/009).
 - (−) La lectura del carrito por email exige pasar por `UserRepository` en cada operación (coste despreciable en la escala del MVP).
+
+---
+
+## ADR-015 · Checkout transaccional: bloqueos pesimistas, proveedor de pago simulado configurable y orden reintentable en `PENDING`
+
+[`CheckoutServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/CheckoutServiceImpl.java), [`PaymentServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/PaymentServiceImpl.java), [`IPaymentProvider.java`](../backend/src/main/java/com/ingesoft/shop/service/payment/IPaymentProvider.java), [`SimulatedPaymentProvider.java`](../backend/src/main/java/com/ingesoft/shop/service/payment/SimulatedPaymentProvider.java), [`PaymentResult.java`](../backend/src/main/java/com/ingesoft/shop/service/payment/PaymentResult.java), [`CartItemRepository.java`](../backend/src/main/java/com/ingesoft/shop/repository/CartItemRepository.java) (`findByCartIdForUpdate`), [`ProductRepository.java`](../backend/src/main/java/com/ingesoft/shop/repository/ProductRepository.java) (`findByIdForUpdate`), [`application.yml`](../backend/src/main/resources/application.yml) (bloque `checkout`)
+
+**Contexto:** R3 (checkout fluido) y R4 (validaciones de stock y pagos) quedaban pendientes tras el carrito (ADR-014), que ya entrega precios y cantidades consistentes. Tres problemas concretos: (1) dos compras concurrentes del mismo producto podrían **sobreventa** si el chequeo de stock y el descuento no son atómicos (riesgo §10 de [`arquitectura.md`](arquitectura.md)); (2) la prueba técnica no puede depender de una pasarela real, pero debe poder demostrar **ambos** resultados de pago (confirmado y rechazado) de forma reproducible; (3) un pago rechazado no puede borrar la compra: la orden debe quedar en un estado reintentable.
+
+**Decisión:**
+- **Un único endpoint orquesta la compra completa:** `POST /api/checkout` (`CheckoutServiceImpl`) ejecuta: usuario por email del token → carrito (se crea si no existe) → **bloqueo pesimista de los ítems del carrito** → **bloqueo pesimista de cada producto** con validación de stock → creación de la `Order` (estado `PENDING`, `orderNumber = "ORD-" + 8 caracteres de un UUID` en mayúsculas, total = subtotal + envío fijo `checkout.shipping-fee`, default `5000.00`) → `IPaymentService.process(orderId, total, paymentData)` → si el pago se **confirma**: descuento de stock de cada producto, transición `PAID` y vaciado del carrito → `201` con `OrderResponse`.
+- **Bloqueo pesimista `SELECT ... FOR UPDATE`:** `CartItemRepository.findByCartIdForUpdate` y `ProductRepository.findByIdForUpdate` declaran `@Lock(LockModeType.PESSIMISTIC_WRITE)`. La verificación de stock ocurre **dentro** del bloqueo, de modo que las compras concurrentes del mismo producto se serializan y ninguna descuenta stock inexistente (mitigación directa del riesgo de sobreventa).
+- **`TransactionTemplate` en lugar de `@Transactional` declarativo:** el programa "todo-o-nada" (`performCheckout`) corre dentro de `transactionTemplate.execute(...)`; ante cualquier error de negocio la transacción hace rollback y no se persiste nada. En el caso de **pago rechazado** el `402 PAYMENT_DECLINED` se lanza **después** de que la transacción ya comprometió la orden `PENDING` y el pago `FAILED`: el cliente recibe el `orderNumber` para reintentar, y los datos de la tentativa quedan auditables.
+- **Abstracción de la pasarela (`IPaymentProvider`):** el flujo no conoce a la pasarela concreta. `SimulatedPaymentProvider` (`@Component`) confirma todo pago **salvo** las tarjetas cuyos dígitos terminen en `checkout.card-declined-suffix` (default `"0002"`); los pagos confirmados devuelven `transactionId = "SIM-<uuid>"` y los rechazados, un `failureReason`. `PaymentResult` (record) transporta estado, transacción y motivo de fallo.
+- **Todo intento de pago se persiste:** `PaymentServiceImpl` (`@Transactional`) guarda una fila en `payments` por cada intento — `CONFIRMED` con `transaction_id` o `FAILED` con `failure_reason` — con `provider` derivado de la clase de la implementación (`SIMULATED`). La trazabilidad del flujo rechazado queda en la BD (coherente con ADR-007).
+- **Validaciones de negocio en el checkout:** carrito sin ítems → `409 CART_EMPTY`; producto del carrito inexistente → `404 PRODUCT_NOT_FOUND`; cantidad > stock disponible (tras el bloqueo) → `409 INSUFFICIENT_STOCK`; tarjeta rechazada → `402 PAYMENT_DECLINED`.
+
+**Consecuencias:**
+- (+) La sobreventa por compras concurrentes queda mitigada a nivel de base de datos (bloqueo + verificación + descuento serializados dentro de la misma transacción).
+- (+) El rechazo de pago es un **estado recuperable**: orden `PENDING` + pago `FAILED` persistidos, y el `402` expone el `orderNumber` para el reintento futuro.
+- (+) Cambiar de pasarela (otra simulada o una real) es añadir una implementación de `IPaymentProvider` sin tocar `PaymentServiceImpl` ni el flujo de checkout (Open/Closed).
+- (+) Cada tentativa de pago es auditable en `payments`: la demo del flujo rechazado tiene evidencia en la BD y en el log.
+- (−) Los bloqueos pesimistas se sostienen durante la transacción completa del checkout: ante alta concurrencia sobre el mismo producto el throughput baja (aceptable en la escala del MVP; la alternativa, decremento atómico con `UPDATE ... WHERE stock >= n`, se documenta como mejora).
+- (−) El reintento de una orden `PENDING` (nuevo cargo sobre el mismo `orderNumber`) no está implementado: falta el endpoint del módulo de órdenes; por ahora el `orderNumber` se entrega al cliente y el estado `PENDING` queda documentado.
+- (−) El envío es fijo e independiente del contenido del carrito (simplificación documentada; un cálculo por peso/valor sería una extensión del flujo existente).

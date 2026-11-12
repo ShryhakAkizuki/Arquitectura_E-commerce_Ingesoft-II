@@ -21,6 +21,7 @@ implementa.
 | **Auth** (registro, login, JWT, perfil propio) | Endpoints `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/users/me`, `PUT /api/users/me` |
 | **Catálogo** (listado público, detalle, CRUD + stock admin) | Endpoints `GET /api/products`, `GET /api/products/{id}`, `GET|POST|PUT|DELETE|PATCH /api/admin/products/**` |
 | **Carrito** (ver, agregar, cambiar cantidad, eliminar ítem) | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`; validación de stock `INSUFFICIENT_STOCK` |
+| **Checkout** (crear orden con pago simulado) | Endpoint `POST /api/checkout`; transaccional con bloqueos pesimistas (`SELECT ... FOR UPDATE`) contra sobreventa; pago simulado con tarjeta de rechazo configurable; la orden queda `PENDING` si el pago se rechaza |
 | **Seguridad** (Spring Security, roles, filtros JWT, errores 401/403) | Política de rutas por rol en [`SecurityConfig.java`](backend/src/main/java/com/ingesoft/shop/config/SecurityConfig.java) |
 | **Excepciones globales** (contrato de error `ApiError` + `ErrorCode`) | [`GlobalExceptionHandler.java`](backend/src/main/java/com/ingesoft/shop/exception/GlobalExceptionHandler.java) |
 | **Documentación** (arquitectura, API, ADRs, SOLID/DRY) | Carpeta [`docs/`](docs) |
@@ -32,8 +33,8 @@ implementa.
 | Documento | Contenido |
 |-----------|-----------|
 | [docs/arquitectura.md](docs/arquitectura.md) | Visión de conjunto, capas, flujo de una petición, estado por módulo |
-| [docs/api.md](docs/api.md) | Endpoints implementados (Auth, Users, Products, Carrito), contrato de errores, credenciales demo |
-| [docs/decisiones-adr.md](docs/decisiones-adr.md) | Decisiones de arquitectura registradas (ADR-001 – ADR-006, ADR-011 – ADR-014) |
+| [docs/api.md](docs/api.md) | Endpoints implementados (Auth, Users, Products, Carrito, Checkout), contrato de errores, credenciales demo |
+| [docs/decisiones-adr.md](docs/decisiones-adr.md) | Decisiones de arquitectura registradas (ADR-001 – ADR-006, ADR-011 – ADR-015) |
 | [docs/solid-dry.md](docs/solid-dry.md) | Evidencias de principios SOLID y DRY en el código implementado |
 
 Documentación interactiva de la API (Swagger UI, disponible al ejecutar el backend):
@@ -107,13 +108,16 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │   │   ├── AdminProductController.java
         │   │   │   ├── AuthController.java
         │   │   │   ├── CartController.java
+        │   │   │   ├── CheckoutController.java
         │   │   │   ├── ProductController.java
         │   │   │   └── UserController.java
         │   │   ├── dto/
         │   │   │   ├── request/
         │   │   │   │   ├── AddCartItemRequest.java
         │   │   │   │   ├── AdjustStockRequest.java
+        │   │   │   │   ├── CheckoutRequest.java
         │   │   │   │   ├── LoginRequest.java
+        │   │   │   │   ├── PaymentData.java
         │   │   │   │   ├── ProductRequest.java
         │   │   │   │   ├── RegisterRequest.java
         │   │   │   │   ├── UpdateCartItemRequest.java
@@ -122,11 +126,15 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │   │       ├── CartItemResponse.java
         │   │   │       ├── CartResponse.java
         │   │   │       ├── LoginResponse.java
+        │   │   │       ├── OrderResponse.java
         │   │   │       ├── ProductResponse.java
         │   │   │       └── UserResponse.java
         │   │   ├── entity/
         │   │   │   ├── Cart.java
         │   │   │   ├── CartItem.java
+        │   │   │   ├── Order.java
+        │   │   │   ├── OrderItem.java
+        │   │   │   ├── Payment.java
         │   │   │   ├── Product.java
         │   │   │   └── User.java
         │   │   ├── enums/
@@ -141,6 +149,9 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │   ├── repository/
         │   │   │   ├── CartItemRepository.java
         │   │   │   ├── CartRepository.java
+        │   │   │   ├── OrderItemRepository.java
+        │   │   │   ├── OrderRepository.java
+        │   │   │   ├── PaymentRepository.java
         │   │   │   ├── ProductRepository.java
         │   │   │   └── UserRepository.java
         │   │   ├── security/
@@ -150,13 +161,21 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │   └── service/
         │   │       ├── IAuthService.java
         │   │       ├── ICartService.java
+        │   │       ├── ICheckoutService.java
+        │   │       ├── IPaymentService.java
         │   │       ├── IProductAdminService.java
         │   │       ├── IProductService.java
-        │   │       └── impl/
-        │   │           ├── AuthServiceImpl.java
-        │   │           ├── CartServiceImpl.java
-        │   │           ├── ProductAdminServiceImpl.java
-        │   │           └── ProductServiceImpl.java
+        │   │       ├── impl/
+        │   │       │   ├── AuthServiceImpl.java
+        │   │       │   ├── CartServiceImpl.java
+        │   │       │   ├── CheckoutServiceImpl.java
+        │   │       │   ├── PaymentServiceImpl.java
+        │   │       │   ├── ProductAdminServiceImpl.java
+        │   │       │   └── ProductServiceImpl.java
+        │   │       └── payment/                  # Abstracción de la pasarela de pago
+        │   │           ├── IPaymentProvider.java
+        │   │           ├── PaymentResult.java
+        │   │           └── SimulatedPaymentProvider.java
         │   └── resources/
         │       ├── application.yml
         │       └── db/migration/
@@ -285,7 +304,11 @@ inserta de forma determinista (hashes BCrypt precomputados):
 
 También se insertan 8 productos demo (precios en COP; el de stock bajo,
 `Cable USB-C 100W`, sirve para demostrar `409 INSUFFICIENT_STOCK` al agregarlo
-al carrito).
+al carrito o al hacer checkout).
+
+Para el checkout simulado, cualquier tarjeta se acepta **salvo** las que tienen
+sus dígitos terminados en `0002` (configurable vía `checkout.card-declined-suffix`):
+sirven para demostrar `402 PAYMENT_DECLINED` (la orden queda `PENDING`).
 
 ---
 
@@ -308,6 +331,7 @@ al carrito).
 | `POST` | `/api/cart/items` | JWT | Agregar producto (acumula la cantidad si ya está en el carrito) |
 | `PATCH` | `/api/cart/items/{itemId}` | JWT | Cambiar la cantidad absoluta de un ítem |
 | `DELETE` | `/api/cart/items/{itemId}` | JWT | Eliminar un ítem del carrito |
+| `POST` | `/api/checkout` | JWT | Crear orden con pago simulado; descuenta stock y vacía el carrito si el pago se confirma |
 
 Detalle completo (bodies, códigos de error, ejemplos) en
 [docs/api.md](docs/api.md).

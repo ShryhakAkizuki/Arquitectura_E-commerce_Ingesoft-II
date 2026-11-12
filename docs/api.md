@@ -15,6 +15,7 @@
    - [4.3 Products (catálogo público)](#43-products-catálogo-público)
    - [4.4 Products (gestión admin)](#44-products-gestión-admin)
    - [4.5 Cart (carrito de compras)](#45-cart-carrito-de-compras)
+   - [4.6 Checkout (compra con pago simulado)](#46-checkout-compra-con-pago-simulado)
 5. [Referencias](#5-referencias)
 
 ---
@@ -90,11 +91,11 @@ generado por [`GlobalExceptionHandler.java`](../backend/src/main/java/com/ingeso
 |------|-------------|----------------|
 | 400 | Validación de entrada | Campos requeridos ausentes, email inválido, JSON malformado, parámetro de tipo inválido |
 | 401 | No autenticado | Login con credenciales inválidas; token ausente/inválido/expirado en ruta protegida |
-| 402 | Pago requerido (reservado) | La pasarela simulada rechazó el pago (`PAYMENT_DECLINED`) |
+| 402 | Pago requerido | La pasarela simulada rechazó el pago (`PAYMENT_DECLINED`); la orden queda `PENDING` para reintentar |
 | 403 | No autorizado | Usuario sin el rol requerido sobre la ruta |
-| 404 | No encontrado | Ruta inexistente; usuario inexistente |
+| 404 | No encontrado | Ruta inexistente; usuario inexistente; producto inexistente en catálogo o en el carrito durante el checkout |
 | 405 | Método no permitido | Método HTTP no soportado sobre la ruta |
-| 409 | Conflicto | Email ya registrado (registro o cambio de perfil) |
+| 409 | Conflicto | Email ya registrado (registro o cambio de perfil); carrito vacío al hacer checkout; stock insuficiente en carrito o checkout |
 | 500 | Error interno | Fallo no controlado (última línea de defensa; el detalle solo va a log) |
 
 ---
@@ -107,15 +108,16 @@ Estado actual de [`ErrorCode.java`](../backend/src/main/java/com/ingesoft/shop/e
 |--------|------|--------|
 | `EMAIL_ALREADY_REGISTERED` | 409 | Registro o cambio de email con email ya existente |
 | `INVALID_CREDENTIALS` | 401 | Login con email/contraseña incorrectos |
-| `PRODUCT_NOT_FOUND` | 404 | Producto inexistente (para el público: igual si está desactivado); al agregarlo al carrito |
-| `INSUFFICIENT_STOCK` | 409 | Stock insuficiente al agregar o actualizar la cantidad de un ítem del carrito |
+| `PRODUCT_NOT_FOUND` | 404 | Producto inexistente (para el público: igual si está desactivado); al agregarlo al carrito; producto del carrito inexistente al hacer checkout |
+| `INSUFFICIENT_STOCK` | 409 | Stock insuficiente al agregar o actualizar la cantidad de un ítem del carrito; o al procesar el checkout |
+| `CART_EMPTY` | 409 | Intento de checkout con el carrito sin ítems |
+| `PAYMENT_DECLINED` | 402 | La pasarela simulada rechazó el pago; la orden queda `PENDING` (reintentable) |
 | `UNAUTHORIZED` | 401 | Token ausente, inválido o expirado |
 | `FORBIDDEN` | 403 | Rol insuficiente para la ruta |
 | `VALIDATION_ERROR` | 400 | Validación de entrada fallida (bean validation / parámetros) |
 | `NOT_FOUND` | 404 | Ruta no existe, usuario inexistente, o ítem de carrito inexistente / ajeno al carrito del usuario |
 | `METHOD_NOT_ALLOWED` | 405 | Método HTTP no permitido sobre la ruta |
 | `INTERNAL_ERROR` | 500 | Última línea de defensa para fallos no controlados |
-
 
 ---
 
@@ -428,7 +430,8 @@ usuario del token.
   suma las cantidades en lugar de duplicar el ítem (restricción única
   `cart_id + product_id`).
 - El precio del ítem se captura del producto **en el momento de agregarlo**
-  (ADR-009); el stock se re-valida en el futuro checkout.
+  (ADR-009); el stock se re-valida al procesar el checkout
+  ([4.6](#46-checkout-compra-con-pago-simulado)).
 - **Aislamiento de ítems:** `PATCH`/`DELETE` verifican que el ítem pertenece
   al carrito del usuario del token; si no, se responde `404 NOT_FOUND` (no se
   revela la existencia de ítems ajenos).
@@ -511,6 +514,129 @@ cantidad solicitada, o no alcanza para la cantidad acumulada)
 
 **Errores:** `401 UNAUTHORIZED` · `404 NOT_FOUND` (ítem inexistente,
 o de otro usuario/carrito)
+
+---
+
+### 4.6 Checkout (compra con pago simulado)
+
+Controller: [`CheckoutController.java`](../backend/src/main/java/com/ingesoft/shop/controller/CheckoutController.java)
+· Servicios: [`CheckoutServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/CheckoutServiceImpl.java) (flujo transaccional)
+y [`PaymentServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/PaymentServiceImpl.java) (persistencia del pago)
+· Proveedor: [`SimulatedPaymentProvider.java`](../backend/src/main/java/com/ingesoft/shop/service/payment/SimulatedPaymentProvider.java)
+(implementación de [`IPaymentProvider`](../backend/src/main/java/com/ingesoft/shop/service/payment/IPaymentProvider.java))
+
+**Autenticación: JWT (cualquier rol)** — la orden se crea siempre para el
+usuario del token (el email viaja por el `Authentication`, nunca por el body).
+
+**Comportamiento general:**
+
+- Un único endpoint ejecuta la compra completa: validar carrito → bloquear
+  ítems y productos → crear la orden → procesar el pago → (si se confirma)
+  descontar stock y vaciar el carrito.
+- **Transacción:** todo el flujo corre dentro de una sola transacción
+  (`TransactionTemplate`). Cualquier error de negocio la aborta y no se
+  persiste nada.
+- **Bloqueo pesimista:** los ítems del carrito y cada producto se bloquean
+  con `SELECT ... FOR UPDATE` (`PESSIMISTIC_WRITE`) para impedir la sobreventa
+  ante peticiones concurrentes (ver ADR-015).
+- **Total:** `subtotal` (suma de `unitPrice × quantity`) + envío fijo
+  (`checkout.shipping-fee`, por defecto `5000.00` COP) → `total`.
+- **Pago simulado:** cualquier tarjeta se acepta **salvo** la cuyos dígitos
+  terminen en `0002` (configurable vía `checkout.card-declined-suffix`). Un
+  pago confirmado genera un `transactionId` `SIM-<uuid>`; todo intento se
+  persiste en la tabla `payments` (confirmado o rechazado).
+- **Rechazo del pago:** la orden se persiste con estado `PENDING`, el pago
+  como `FAILED`, y la petición responde `402 PAYMENT_DECLINED`. La orden
+  `PENDING` puede reintentarse más adelante con su `orderNumber` (el módulo
+  de reintentos aún no está implementado).
+- **Confirmación:** se descuenta el stock de cada producto, la orden pasa a
+  `PAID` y el carrito se vacía. Los ítems de la orden son una copia
+  **desnormalizada** (`productName` y `unitPrice` inmutables en
+  `order_items`), de modo que el histórico de la orden no se altera si el
+  producto cambia o se desactiva (ADR-008).
+
+#### `POST /api/checkout` — crear orden con pago
+
+**Body** ([`CheckoutRequest`](../backend/src/main/java/com/ingesoft/shop/dto/request/CheckoutRequest.java)):
+
+| Campo | Tipo | Restricciones |
+|-------|------|---------------|
+| `shippingAddress` | string | requerido, máx. 255 caracteres |
+| `payment` | [`PaymentData`](#paymentdata) | requerido, validado en cascada (`@Valid`) |
+
+**`payment`** ([`PaymentData`](../backend/src/main/java/com/ingesoft/shop/dto/request/PaymentData.java)):
+
+| Campo | Tipo | Restricciones |
+|-------|------|---------------|
+| `method` | string | requerido, máx. 30 caracteres (p. ej. `"card"`) |
+| `cardNumber` | string | requerido, máx. 25 caracteres. En el proveedor simulado, los dígitos que terminen en `0002` se rechazan |
+| `cardholderName` | string | **opcional**, máx. 100 caracteres |
+
+```json
+{
+  "shippingAddress": "Calle 45 # 12-30, Bogotá",
+  "payment": {
+    "method": "card",
+    "cardNumber": "4242 4242 4242 4242",
+    "cardholderName": "Usuario Demo"
+  }
+}
+```
+
+**Respuesta `201 Created`** ([`OrderResponse`](../backend/src/main/java/com/ingesoft/shop/dto/response/OrderResponse.java)):
+
+```json
+{
+  "id": "b7e2c4d8-9a1f-4c3e-8d2b-5f6a7c8d9e0f",
+  "orderNumber": "ORD-1A2B3C4D",
+  "status": "PAID",
+  "subtotal": 259800.00,
+  "shipping": 5000.00,
+  "total": 264800.00,
+  "shippingAddress": "Calle 45 # 12-30, Bogotá",
+  "createdAt": "2026-11-12T03:00:00Z",
+  "items": [
+    {
+      "productId": "00000000-0000-0000-0000-000000000105",
+      "productName": "Cable USB-C 100W",
+      "unitPrice": 129900.00,
+      "quantity": 2,
+      "lineTotal": 259800.00
+    }
+  ]
+}
+```
+
+Ejemplo (después de agregar ítems al carrito con `POST /api/cart/items`):
+
+```bash
+curl -X POST http://localhost:8080/api/checkout \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "shippingAddress": "Calle 45 # 12-30, Bogotá",
+    "payment": { "method": "card", "cardNumber": "4242 4242 4242 4242" }
+  }'
+```
+
+Simulación de rechazo (tarjeta cuyos dígitos terminen en `0002`):
+
+```bash
+curl -X POST http://localhost:8080/api/checkout \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "shippingAddress": "Calle 45 # 12-30, Bogotá",
+    "payment": { "method": "card", "cardNumber": "4000 0000 0000 0002" }
+  }'
+```
+
+**Errores:** `400 VALIDATION_ERROR` · `401 UNAUTHORIZED` ·
+`404 PRODUCT_NOT_FOUND` (un producto del carrito fue eliminado) ·
+`409 CART_EMPTY` (el carrito no tiene ítems) · `409 INSUFFICIENT_STOCK`
+(entró una compra concurrente y el stock ya no alcanza) ·
+`402 PAYMENT_DECLINED` (la pasarela simulada rechazó la tarjeta; la orden
+queda `PENDING` y su `orderNumber` viene en el `message` del error)
 
 ---
 
