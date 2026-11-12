@@ -5,9 +5,6 @@ import org.springframework.boot.autoconfigure.SpringBootApplication;
 
 /**
  * Punto de entrada del backend del e-commerce (Ingesoft II).
- *
- * Regla de dependencias por capas:
- * Controller → Service (interface) → Repository → Database.
  */
 @SpringBootApplication
 public class ShopApplication {
