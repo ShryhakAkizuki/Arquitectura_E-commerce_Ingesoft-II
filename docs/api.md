@@ -12,6 +12,8 @@
 4. [Endpoints implementados](#4-endpoints-implementados)
    - [4.1 Auth](#41-auth)
    - [4.2 Users](#42-users)
+   - [4.3 Products (catálogo público)](#43-products-catálogo-público)
+   - [4.4 Products (gestión admin)](#44-products-gestión-admin)
 5. [Rutas reservadas (módulos en desarrollo)](#5-rutas-reservadas-módulos-en-desarrollo)
 6. [Referencias](#6-referencias)
 
@@ -95,10 +97,6 @@ generado por [`GlobalExceptionHandler.java`](../backend/src/main/java/com/ingeso
 | 409 | Conflicto | Email ya registrado (registro o cambio de perfil) |
 | 500 | Error interno | Fallo no controlado (última línea de defensa; el detalle solo va a log) |
 
-> Los códigos `404 PRODUCT_NOT_FOUND`, `404 ORDER_NOT_FOUND`, `409
-> INSUFFICIENT_STOCK`, `409 CART_EMPTY` y `409 ORDER_STATUS_INVALID` ya están
-> definidos en `ErrorCode` para los módulos en desarrollo.
-
 ---
 
 ## 3. Códigos de negocio
@@ -109,6 +107,7 @@ Estado actual de [`ErrorCode.java`](../backend/src/main/java/com/ingesoft/shop/e
 |--------|------|--------|
 | `EMAIL_ALREADY_REGISTERED` | 409 | Registro o cambio de email con email ya existente |
 | `INVALID_CREDENTIALS` | 401 | Login con email/contraseña incorrectos |
+| `PRODUCT_NOT_FOUND` | 404 | Producto inexistente (para el público: igual si está desactivado) |
 | `UNAUTHORIZED` | 401 | Token ausente, inválido o expirado |
 | `FORBIDDEN` | 403 | Rol insuficiente para la ruta |
 | `VALIDATION_ERROR` | 400 | Validación de entrada fallida (bean validation / parámetros) |
@@ -248,7 +247,167 @@ otro usuario; cambiar al mismo email propio está permitido)
 
 ---
 
-## 5. Referencias
+### 4.3 Products (catálogo público)
+
+Controller: [`ProductController.java`](../backend/src/main/java/com/ingesoft/shop/controller/ProductController.java)
+· Servicio: [`ProductServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/ProductServiceImpl.java)
+
+**Autenticación: pública** (no requiere token). Solo expone productos con
+`available = true`: los desactivados quedan invisibles para el público.
+
+#### `GET /api/products` — listado paginado
+
+**Parámetros de consulta:**
+
+| Parámetro | Tipo | Default | Descripción |
+|-----------|------|---------|-------------|
+| `page` | int | `0` | Índice de página (0-based) |
+| `size` | int | `10` | Elementos por página |
+| `search` | string | — | Búsqueda parcial en `name` (insensible a mayúsculas/minúsculas) |
+| `sort` | string | `name` | Formato `campo` o `campo,desc`. Campos válidos: `name`, `price`, `stock`, `updatedAt` |
+
+**Respuesta `200 OK`:** `Page<ProductResponse>` (formato de paginación
+estándar de Spring Data):
+
+```json
+{
+  "content": [
+    {
+      "id": "00000000-0000-0000-0000-000000000101",
+      "name": "Laptop ProBook 14\"",
+      "description": "Laptop ProBook 14\" con 16 GB de RAM, SSD de 512 GB y procesador de 13a generacion. Ideal para trabajo y estudio.",
+      "price": 2599900.00,
+      "stock": 10,
+      "imageUrl": "/img/productos/laptop-probook.webp",
+      "available": true,
+      "updatedAt": "2026-11-12T02:00:00Z"
+    }
+  ],
+  "totalElements": 8,
+  "totalPages": 1,
+  "size": 10,
+  "number": 0,
+  "first": true,
+  "last": true,
+  "numberOfElements": 1,
+  "empty": false
+}
+```
+
+**Errores:** `400 VALIDATION_ERROR` (`page`/`size` no numéricos)
+
+---
+
+#### `GET /api/products/{id}` — detalle de un producto
+
+**Parámetros de ruta:** `id` (UUID)
+
+**Respuesta `200 OK`:** `ProductResponse` (misma forma que un elemento de
+`content` del listado).
+
+**Errores:** `404 PRODUCT_NOT_FOUND` (el producto no existe **o** está
+desactivado: para el público ambos casos se responden igual, para no revelar
+la existencia de productos desactivados)
+
+---
+
+### 4.4 Products (gestión admin)
+
+Controller: [`AdminProductController.java`](../backend/src/main/java/com/ingesoft/shop/controller/AdminProductController.java)
+· Servicio: [`ProductAdminServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/ProductAdminServiceImpl.java)
+
+**Autenticación: JWT + rol `ADMIN`** (`@PreAuthorize("hasRole('ADMIN')")` a
+nivel de clase). Un usuario autenticado con rol `USER` recibe
+`403 FORBIDDEN`; sin token (o inválido), `401 UNAUTHORIZED`.
+
+#### `GET /api/admin/products` — listado completo
+
+Mismos parámetros de consulta que `GET /api/products` (`page`, `size`,
+`search`, `sort`), con dos diferencias:
+
+- **Incluye productos desactivados** (`available = false`): el admin ve el
+  inventario completo.
+- El campo de orden acepta además `available`.
+
+**Respuesta `200 OK`:** `Page<ProductResponse>`.
+
+**Errores:** `400 VALIDATION_ERROR` · `401 UNAUTHORIZED` · `403 FORBIDDEN`
+
+---
+
+#### `POST /api/admin/products` — crear producto
+
+**Body** ([`ProductRequest`](../backend/src/main/java/com/ingesoft/shop/dto/request/ProductRequest.java)):
+
+| Campo | Tipo | Restricciones |
+|-------|------|---------------|
+| `name` | string | requerido, máx. 150 caracteres |
+| `description` | string | requerido, máx. 2000 caracteres |
+| `price` | number | requerido, mayor que 0 |
+| `stock` | int | requerido, ≥ 0 |
+| `imageUrl` | string | **opcional**, máx. 500 caracteres |
+
+```json
+{
+  "name": "Webcam Full HD",
+  "description": "Webcam 1080p con microfono integrado y enfoque automatico.",
+  "price": 189900.00,
+  "stock": 15,
+  "imageUrl": "/img/productos/webcam-fhd.webp"
+}
+```
+
+**Respuesta `201 Created`:** `ProductResponse` (el producto nace con
+`available = true`).
+
+**Errores:** `400 VALIDATION_ERROR` · `401 UNAUTHORIZED` · `403 FORBIDDEN`
+
+---
+
+#### `PUT /api/admin/products/{id}` — actualizar producto
+
+**Body:** mismo `ProductRequest` (actualización total de los campos
+editables; `id` y `available` no se aceptan en el body — ver
+[`DELETE /api/admin/products/{id}`](#delete-apiprodproductsid--desactivar-soft-delete)).
+
+**Respuesta `200 OK`:** `ProductResponse` actualizado.
+
+**Errores:** `400 VALIDATION_ERROR` · `401 UNAUTHORIZED` · `403 FORBIDDEN` ·
+`404 PRODUCT_NOT_FOUND`
+
+---
+
+#### `DELETE /api/admin/products/{id}` — desactivar (soft delete)
+
+**No** elimina la fila: marca `available = false` para preservar la
+trazabilidad de órdenes futuras que referencian el producto (ver ADR-008).
+
+**Respuesta `200 OK`:** `ProductResponse` con `available = false`.
+
+**Errores:** `401 UNAUTHORIZED` · `403 FORBIDDEN` · `404 PRODUCT_NOT_FOUND`
+
+---
+
+#### `PATCH /api/admin/products/{id}/stock` — ajustar stock
+
+**Body** ([`AdjustStockRequest`](../backend/src/main/java/com/ingesoft/shop/dto/request/AdjustStockRequest.java)):
+
+| Campo | Tipo | Restricciones |
+|-------|------|---------------|
+| `stock` | int | requerido, ≥ 0. Es el valor **absoluto** de stock (no un delta) |
+
+```json
+{ "stock": 7 }
+```
+
+**Respuesta `200 OK`:** `ProductResponse` con el stock actualizado.
+
+**Errores:** `400 VALIDATION_ERROR` · `401 UNAUTHORIZED` · `403 FORBIDDEN` ·
+`404 PRODUCT_NOT_FOUND`
+
+---
+
+## 6. Referencias
 
 - Diseño completo y flujo de checkout: [`arquitectura.md`](arquitectura.md)
 - Decisiones relacionadas (JWT, pago simulado, soft delete): [`decisiones-adr.md`](decisiones-adr.md)

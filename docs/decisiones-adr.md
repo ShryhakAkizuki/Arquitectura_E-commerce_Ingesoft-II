@@ -2,7 +2,7 @@
 
 Registro de decisiones técnicas del proyecto.
 
-**Estado de los ADR** (al último commit):
+**Estado de los ADR**:
 
 | ADR | Tema |
 |-----|------|
@@ -14,6 +14,7 @@ Registro de decisiones técnicas del proyecto.
 | ADR-006 | Autenticación stateless: JWT HS256 + BCrypt |
 | ADR-011 | Seed determinístico con hashes BCrypt precomputados |
 | ADR-012 | Checkstyle en la fase `validate` del build (falla el build ante violación) |
+| ADR-013 | Catálogo: lectura pública / gestión admin separadas, soft delete y stock absoluto |
 
 ---
 
@@ -151,3 +152,28 @@ Registro de decisiones técnicas del proyecto.
 **Consecuencias:**
 - (+) Ningún código con violaciones llega al build: la calidad es verificable con `./mvnw compile`.
 - (−) El código debe respetar las reglas desde el inicio (se documenta en el README y se usa como referencia en cada paso de implementación).
+
+---
+
+## ADR-013 · Catálogo: lectura pública / gestión admin separadas, soft delete y stock absoluto
+
+[`ProductController.java`](../backend/src/main/java/com/ingesoft/shop/controller/ProductController.java), [`AdminProductController.java`](../backend/src/main/java/com/ingesoft/shop/controller/AdminProductController.java), [`IProductService.java`](../backend/src/main/java/com/ingesoft/shop/service/IProductService.java), [`IProductAdminService.java`](../backend/src/main/java/com/ingesoft/shop/service/IProductAdminService.java), [`ProductRepository.java`](../backend/src/main/java/com/ingesoft/shop/repository/ProductRepository.java), [`ProductRequest.java`](../backend/src/main/java/com/ingesoft/shop/dto/request/ProductRequest.java), [`AdjustStockRequest.java`](../backend/src/main/java/com/ingesoft/shop/dto/request/AdjustStockRequest.java)
+
+**Contexto:** el enunciado exige un catálogo de productos (R5) visible para cualquier visitante y un CRUD de productos y stock reservado a administradores (R2). Los módulos de Carrito/Checkout/Órdenes que llegarán después necesitan leer el catálogo sin depender de lógica de administración, y las órdenes futuras referenciarán productos que pueden dejar de estar a la venta.
+
+**Decisión:**
+- **Dos superficies de servicio separadas por rol:** `IProductService` (2 métodos: `list`, `getById`) para el catálogo público y `IProductAdminService` (5 métodos: `listAll`, `create`, `update`, `deactivate`, `adjustStock`) para la administración. Cada controlador depende solo de la interfaz que le corresponde (ver SOLID §I en [`solid-dry.md`](solid-dry.md)).
+- **Autorización por clase, no por método:** `@PreAuthorize("hasRole('ADMIN')")` sobre `AdminProductController` cubre los 5 endpoints de un solo golpe; el controlador público no declara ninguna restricción (rutas permitidas en `SecurityConfig`).
+- **Soft delete con `available = false`:** `DELETE /api/admin/products/{id}` **no** elimina la fila; marca el producto como no disponible. El listado público filtra `available = true` y el admin ve todo. Así las órdenes futuras que referencien el producto no pierden su historial, y la desactivación es reversible.
+- **Detalle público no revela desactivados:** `GET /api/products/{id}` responde `404 PRODUCT_NOT_FOUND` tanto si el producto no existe como si está desactivado (el cliente no puede inferir la existencia de productos fuera de venta).
+- **Una sola consulta de catálogo:** `ProductRepository.findCatalogPage(search, onlyAvailable, pageable)` es parametrizada por `onlyAvailable` para que el listado público (`true`) y el admin (`false`) reutilicen la misma consulta, evitando duplicar la lógica de búsqueda/orden/paginación (ver Open/Closed §4 en [`solid-dry.md`](solid-dry.md)).
+- **Un solo DTO de entrada para POST y PUT:** `ProductRequest` con Bean Validation (`@NotBlank`, `@Size`, `@Positive`, `@PositiveOrZero`) se usa para crear y actualizar; el ajuste de stock tiene su propio `AdjustStockRequest` de un campo. El servicio además valida reglas de negocio (`BusinessException` + `VALIDATION_ERROR`/`PRODUCT_NOT_FOUND`) como segunda capa, de modo que la API es segura aunque el `@Valid` no llegue a ejecutarse.
+- **Stock absoluto, no delta:** `PATCH /api/admin/products/{id}/stock` recibe el valor final (`{ "stock": 7 }`), no un incremento/decremento. Es semánticamente más simple para un admin que "pinta" el stock y evita operaciones aritméticas con estado.
+- **`imageUrl` opcional:** el producto puede crearse sin imagen (el frontend mostrará un placeholder); `name`, `description`, `price` y `stock` son obligatorios.
+
+**Consecuencias:**
+- (+) El módulo Carrito/Checkout podrá depender únicamente de `IProductService` para leer precios/stock, sin acoplarse a operaciones admin.
+- (+) La desactivación preserva la integridad referencial de las órdenes futuras y permite reactivar productos sin re-crearlos.
+- (+) Añadir un campo o una regla al catálogo no obliga a tocar el controlador público si es una regla de admin, y viceversa.
+- (−) `DELETE` no libera espacio en la tabla: los productos desactivados siguen ocupando filas (coste despreciable en la escala del MVP y necesario para el historial de órdenes).
+- (−) El stock absoluto descarta ajustes concurrentes tipo "quitar 1 unidad" (lo resolverá el checkout con decremento atómico al confirmar la orden, módulo pendiente).

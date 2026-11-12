@@ -13,10 +13,10 @@ Tienda online con autenticación por roles (usuario/administrador), gestión CRU
 | # | Requerimiento | Módulo responsable | Evidencia | Estado |
 |---|---------------|--------------------|-----------|--------|
 | R1 | Autenticación y gestión de usuarios segura | `backend: auth` (JWT + BCrypt) | Endpoints `/api/auth/*`, `/api/users/me` | Implementado |
-| R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` y `orders` con `@PreAuthorize("hasRole('ADMIN')")` | Endpoints `/api/admin/*` | Pendiente |
+| R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` con `@PreAuthorize("hasRole('ADMIN')")`; `orders` pendiente | Endpoints `/api/admin/products/**` (CRUD + stock) | Parcial (órdenes pendiente) |
 | R3 | Carrito y checkout fluidos | `backend: cart` + `checkout`; `frontend: cart` | Flujo documentado | Pendiente |
 | R4 | Validaciones de stock y pagos | `CartService` y `CheckoutService` transaccional | Pruebas unitarias | Pendiente |
-| R5 | Interfaz clara de productos y detalles | `frontend: catalog` | Páginas catálogo y detalle | Pendiente |
+| R5 | Interfaz clara de productos y detalles | `backend: catalog` (catálogo público); `frontend: catalog` pendiente | Endpoints `GET /api/products`, `GET /api/products/{id}` | Parcial (frontend pendiente) |
 
 ### 1.2 Criterios de evaluación → estrategia
 
@@ -167,7 +167,7 @@ El esquema implementado en [`V1__init.sql`](../backend/src/main/resources/db/mig
 
 - **JWT** HS256 con expiración de 2 h (configurable en `application.yml`). El token se emite en `/api/auth/login` y se envía en header `Authorization: Bearer <token>`.
 - **BCrypt** para hashes de contraseña (nunca en texto plano; fuerza 10).
-- **Roles:** `USER` y `ADMIN`. Rutas admin protegidas con `@PreAuthorize("hasRole('ADMIN')")`; `/api/users/me` solo con el propio JWT.
+- **Roles:** `USER` y `ADMIN`. Rutas admin protegidas con `@PreAuthorize("hasRole('ADMIN')")` (habilitado con `@EnableMethodSecurity` en [`SecurityConfig.java`](../backend/src/main/java/com/ingesoft/shop/config/SecurityConfig.java)); `/api/users/me` solo con el propio JWT.
 - **CORS** restringido al origen del frontend local (`http://localhost:5173`).
 - **Validación de entrada** en registro/login (email válido, longitud de contraseña) con Bean Validation.
 
@@ -197,6 +197,8 @@ Base URL: `http://localhost:8080/api`. La referencia completa por endpoint con e
 |---------|-----------|--------|
 | Auth | `POST /auth/register`, `POST /auth/login` | Público |
 | Users | `GET /users/me`, `PUT /users/me` | Usuario |
+| Products | `GET /products`, `GET /products/{id}` | Público |
+| Products (admin) | `GET/POST /admin/products`, `PUT/DELETE /admin/products/{id}`, `PATCH /admin/products/{id}/stock` | Admin |
 | Docs | `/swagger-ui.html` | Público |
 
 **Formato de error estándar** (todo el backend responde igual):

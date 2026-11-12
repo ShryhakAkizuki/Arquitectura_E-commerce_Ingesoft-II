@@ -1,11 +1,11 @@
 # Evidencias SOLID y DRY
 
 Este documento mapea cada principio a **fragmentos de código real ya implementado**
-en el módulo de autenticación/usuarios (R1) y en la infraestructura de seguridad
-y errores. Cada principio indica **dónde** se aplica, **por qué** y **qué gana**
-el proyecto. Los elementos de los módulos aún en desarrollo (Catálogo, Carrito,
-Checkout, Órdenes, Admin) se citan como *pendientes* y se evidenciarán aquí
-cuando se implementen.
+en el módulo de autenticación/usuarios (R1), en el catálogo de productos (R2/R5)
+y en la infraestructura de seguridad y errores. Cada principio indica
+**dónde** se aplica, **por qué** y **qué gana** el proyecto. Los elementos de
+los módulos aún en desarrollo (Carrito, Checkout, Órdenes) se citan como
+*pendientes* y se evidenciarán aquí cuando se implementen.
 
 > Convención de enlaces: los archivos se enlazan con su ruta relativa al
 > monorepo. Los fragmentos son extractos literales de la fuente (se recortan
@@ -102,6 +102,27 @@ public ResponseEntity<ApiError> handleBusinessException(BusinessException ex) {
 }
 ```
 
+### 5. El catálogo se separa por rol: un motivo de cambio por controlador
+
+[`ProductController.java`](../backend/src/main/java/com/ingesoft/shop/controller/ProductController.java)
+expone **solo** lectura pública (`list`, `getById`) y
+[`AdminProductController.java`](../backend/src/main/java/com/ingesoft/shop/controller/AdminProductController.java)
+expone **solo** gestión (CRUD + stock), declarando el requisito de rol a
+nivel de clase. Si cambia la política de administración (por ejemplo, un rol
+`MODERATOR` adicional), se toca **solo** el controlador admin: el público ni
+sabe que existe el concepto de rol.
+
+```java
+@RestController
+@RequestMapping("/api/admin/products")
+@PreAuthorize("hasRole('ADMIN')")
+public class AdminProductController {
+```
+
+La regla de negocio de escritura (validaciones, desactivación, ajuste de
+stock) vive en `ProductAdminServiceImpl`; la de lectura en
+`ProductServiceImpl`. Los controladores no deciden, solo traducen.
+
 ---
 
 ## O — Open/Closed
@@ -133,10 +154,10 @@ ya reserva códigos para los módulos venideros. Añadir uno nuevo es añadir un
 `ErrorCode` en respuesta, porque delega el estado al propio enum:
 
 ```java
-EMAIL_ALREADY_REGISTERED(HttpStatus.CONFLICT),   /** 409 */
-INSUFFICIENT_STOCK(HttpStatus.CONFLICT),         /** 409: pendiente, módulo Carrito/Checkout */
-PAYMENT_DECLINED(HttpStatus.PAYMENT_REQUIRED),   /** 402: pendiente, módulo Checkout */
-ORDER_STATUS_INVALID(HttpStatus.CONFLICT);       /** 409: pendiente, módulo Órdenes */
+PRODUCT_NOT_FOUND(HttpStatus.NOT_FOUND),         /** 404: el producto no existe o esta desactivado. */
+INSUFFICIENT_STOCK(HttpStatus.CONFLICT),         /** 409: stock insuficiente al agregar al carrito o en el checkout. */
+PAYMENT_DECLINED(HttpStatus.PAYMENT_REQUIRED),   /** 402: la pasarela (simulada) rechazo el pago; la orden queda PENDING. */
+ORDER_STATUS_INVALID(HttpStatus.CONFLICT);       /** 409: transicion de estado de orden no permitida. */
 ```
 
 ### 3. Un gateway de pago real será una nueva clase
@@ -144,6 +165,25 @@ ORDER_STATUS_INVALID(HttpStatus.CONFLICT);       /** 409: pendiente, módulo Ór
 *Pendiente (módulo Checkout):* el pago se abstracte tras `IPaymentProvider`.
 Conectar un gateway real es implementar esa interfaz en una **nueva** clase;
 `CheckoutService` y `PaymentService` no se modifican. (Ver ADR-007.)
+
+### 4. El listado admin reutiliza la misma consulta sin modificar la pública
+
+[`ProductRepository.java`](../backend/src/main/java/com/ingesoft/shop/repository/ProductRepository.java)
+define **una sola** consulta de catálogo parametrizada por `onlyAvailable`:
+el listado público la llama con `true` y el admin con `false`. El
+comportamiento "ver también los desactivados" se agregó con un parámetro, sin
+duplicar la consulta ni tocar el método público.
+
+```java
+@Query("""
+        SELECT p FROM Product p
+        WHERE (:search IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', :search, '%')))
+          AND (:onlyAvailable = FALSE OR p.available = TRUE)
+        """)
+Page<Product> findCatalogPage(@Param("search") String search,
+                              @Param("onlyAvailable") boolean onlyAvailable,
+                              Pageable pageable);
+```
 
 ---
 
@@ -186,6 +226,14 @@ public PasswordEncoder passwordEncoder() {
 }
 ```
 
+### 4. `ProductRepository` es sustituible por `JpaRepository` (y por mocks)
+
+[`ProductRepository.java`](../backend/src/main/java/com/ingesoft/shop/repository/ProductRepository.java)
+extiende `JpaRepository<Product, UUID>` y agrega una sola consulta de dominio.
+Tanto `ProductServiceImpl` como `ProductAdminServiceImpl` dependen de esa
+interfaz, de modo que en tests puede sustituirse por un **mock** sin alterar
+ningún servicio del catálogo.
+
 ---
 
 ## I — Interface Segregation
@@ -199,9 +247,13 @@ que no usa.
 exponen exactamente lo que el módulo Auth necesita. No se mezclan operaciones
 de catálogo ni de órdenes en la misma interfaz.
 
-*Pendiente (módulos venideros):* `IProductService` (operaciones públicas) y
-`IProductAdminService` (operaciones admin) se mantendrán **separadas** para que
-el controlador público no dependa de operaciones que no le corresponden.
+**Ya implementado:** [`IProductService`](../backend/src/main/java/com/ingesoft/shop/service/IProductService.java)
+(2 métodos: `list`, `getById`) y
+[`IProductAdminService`](../backend/src/main/java/com/ingesoft/shop/service/IProductAdminService.java)
+(5 métodos: `listAll`, `create`, `update`, `deactivate`, `adjustStock`) son
+interfaces **separadas**. `ProductController` depende solo de la primera y
+`AdminProductController` solo de la segunda: ni un controlador ni un servicio
+del catálogo público conocen operaciones de administración.
 
 ### 2. `UserRepository` solo expone las consultas del dominio
 
@@ -262,6 +314,23 @@ sus detalles internos:
 
 ```java
 http.addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+```
+
+### 4. Los controladores del catálogo dependen de interfaces de servicio
+
+Ambos controladores reciben su dependencia **por constructor** declarada como
+`IProductService` y `IProductAdminService` (interfaces), no como las clases
+`*Impl`. La implementación puede maquetarse en tests sin tocar el
+controlador.
+
+```java
+public ProductController(IProductService productService) {
+    this.productService = productService;
+}
+
+public AdminProductController(IProductAdminService productAdminService) {
+    this.productAdminService = productAdminService;
+}
 ```
 
 ---
@@ -358,4 +427,36 @@ es la **única** instancia usada para hashear (registro, cambio de contraseña)
 y comparar (login). No hay `BCryptPasswordEncoder` instanciado a mano en
 varios servicios.
 
+### 7. El mapeo del catálogo entidad → respuesta se define una sola vez
+
+[`ProductResponse.from(Product)`](../backend/src/main/java/com/ingesoft/shop/dto/response/ProductResponse.java)
+es el **único** punto que convierte `Product` a `ProductResponse`: los 7
+endpoints de catálogo (públicos `list`/`getById` y admin `listAll`/`create`/
+`update`/`deactivate`/`adjustStock`) pasan por él. Si cambia el contrato de
+salida, se edita un método.
+
+```java
+public static ProductResponse from(Product product) {
+    return new ProductResponse(product.getId(), product.getName(), product.getDescription(),
+            product.getPrice(), product.getStock(), product.getImageUrl(),
+            product.isAvailable(), product.getUpdatedAt());
+}
+```
+
+De la misma forma, [`ProductRequest`](../backend/src/main/java/com/ingesoft/shop/dto/request/ProductRequest.java)
+es el **único** DTO para creación (`POST`) y actualización (`PUT`): las
+restricciones de Bean Validation se declaran **una vez** y se comparten entre
+ambas operaciones.
+
 ---
+
+## Matriz resumen
+
+| Principio | Auth (R1) | Catálogo (R2/R5) | Pendiente |
+|-----------|-----------|------------------|-----------|
+| S | ✔ controlador/servicio/JWT/errores | ✔ controladores por rol, servicios de lectura/escritura | Carrito, Checkout, Órdenes |
+| O | ✔ métodos nuevos en `IAuthService`, `ErrorCode` | ✔ flag `onlyAvailable` en `findCatalogPage` | Gateway `IPaymentProvider` |
+| L | ✔ repositorios, `PasswordEncoder` | ✔ `ProductRepository` sustituible | — |
+| I | ✔ `IAuthService` | ✔ `IProductService` / `IProductAdminService` | — |
+| D | ✔ inyección por constructor | ✔ inyección por constructor | — |
+| DRY | ✔ `UserResponse.from`, `ErrorCode`, `ApiError` | ✔ `ProductResponse.from`, `ProductRequest` | — |

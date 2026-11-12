@@ -19,6 +19,7 @@ implementa.
 | **Infraestructura** (Spring Boot, Maven, Flyway, perfiles) | Perfil `postgres` (default) y `h2` (plan B sin PostgreSQL); esquema completo versionado |
 | **Esquema de BD completo** (users, products, carts, cart_items, orders, order_items, payments) | [`V1__init.sql`](backend/src/main/resources/db/migration/V1__init.sql) + seed demo en [`V2__seed.sql`](backend/src/main/resources/db/migration/V2__seed.sql) |
 | **Auth** (registro, login, JWT, perfil propio) | Endpoints `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/users/me`, `PUT /api/users/me` |
+| **Catálogo** (listado público, detalle, CRUD + stock admin) | Endpoints `GET /api/products`, `GET /api/products/{id}`, `GET|POST|PUT|DELETE|PATCH /api/admin/products/**` |
 | **Seguridad** (Spring Security, roles, filtros JWT, errores 401/403) | Política de rutas por rol en [`SecurityConfig.java`](backend/src/main/java/com/ingesoft/shop/config/SecurityConfig.java) |
 | **Excepciones globales** (contrato de error `ApiError` + `ErrorCode`) | [`GlobalExceptionHandler.java`](backend/src/main/java/com/ingesoft/shop/exception/GlobalExceptionHandler.java) |
 | **Documentación** (arquitectura, API, ADRs, SOLID/DRY) | Carpeta [`docs/`](docs) |
@@ -30,7 +31,7 @@ implementa.
 | Documento | Contenido |
 |-----------|-----------|
 | [docs/arquitectura.md](docs/arquitectura.md) | Visión de conjunto, capas, flujo de una petición, estado por módulo |
-| [docs/api.md](docs/api.md) | Endpoints implementados (Auth, Users), contrato de errores, credenciales demo |
+| [docs/api.md](docs/api.md) | Endpoints implementados (Auth, Users, Products), contrato de errores, credenciales demo |
 | [docs/decisiones-adr.md](docs/decisiones-adr.md) | Decisiones de arquitectura registradas (ADR-001 … ADR-010) |
 | [docs/solid-dry.md](docs/solid-dry.md) | Evidencias de principios SOLID y DRY en el código implementado |
 
@@ -79,15 +80,15 @@ Documentación interactiva de la API (Swagger UI, disponible al ejecutar el back
 Arquitectura_E-commerce_Ingesoft-II/
 ├── package.json                  # Scripts del monorepo (npm run dev)
 ├── LICENSE
-├── README.md                     # Este archivo
+├── README.md
 ├── docs/                         # Documentación del proyecto
 │   ├── api.md
 │   ├── arquitectura.md
 │   ├── decisiones-adr.md
 │   └── solid-dry.md
-├── scripts/                      # Scripts auxiliares (por definir)
+├── scripts/
 │   └── .gitkeep
-├── frontend/                     # Frontend React (por implementar)
+├── frontend/                     # Frontend (por implementar)
 │   └── .gitkeep
 └── backend/
     ├── mvnw / mvnw.cmd           # Maven Wrapper
@@ -102,17 +103,23 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │   │   ├── CorsConfig.java             # CORS para el frontend (localhost:5173)
         │   │   │   └── SecurityConfig.java         # Política de rutas y roles, BCrypt, 401/403
         │   │   ├── controller/
+        │   │   │   ├── AdminProductController.java     
         │   │   │   ├── AuthController.java
+        │   │   │   ├── ProductController.java
         │   │   │   └── UserController.java
         │   │   ├── dto/
         │   │   │   ├── request/
+        │   │   │   │   ├── AdjustStockRequest.java
         │   │   │   │   ├── LoginRequest.java
+        │   │   │   │   ├── ProductRequest.java
         │   │   │   │   ├── RegisterRequest.java
         │   │   │   │   └── UpdateProfileRequest.java
         │   │   │   └── response/
         │   │   │       ├── LoginResponse.java
+        │   │   │       ├── ProductResponse.java
         │   │   │       └── UserResponse.java
         │   │   ├── entity/
+        │   │   │   ├── Product.java
         │   │   │   └── User.java
         │   │   ├── enums/
         │   │   │   ├── OrderStatus.java
@@ -124,6 +131,7 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │   │   ├── ErrorCode.java
         │   │   │   └── GlobalExceptionHandler.java
         │   │   ├── repository/
+        │   │   │   ├── ProductRepository.java
         │   │   │   └── UserRepository.java
         │   │   ├── security/
         │   │   │   ├── AppUserDetailsService.java
@@ -131,8 +139,12 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │   │   └── JwtTokenProvider.java(HS256)
         │   │   └── service/
         │   │       ├── IAuthService.java
+        │   │       ├── IProductAdminService.java
+        │   │       ├── IProductService.java
         │   │       └── impl/
-        │   │           └── AuthServiceImpl.java
+        │   │           ├── AuthServiceImpl.java
+        │   │           ├── ProductAdminServiceImpl.java
+        │   │           └── ProductServiceImpl.java
         │   └── resources/
         │       ├── application.yml
         │       └── db/migration/
@@ -272,6 +284,13 @@ probar `INSUFFICIENT_STOCK` en el futuro módulo de carrito).
 | `POST` | `/api/auth/login` | No | Iniciar sesión → devuelve token JWT + datos del usuario |
 | `GET` | `/api/users/me` | JWT | Datos del usuario autenticado |
 | `PUT` | `/api/users/me` | JWT | Actualizar nombre, email y/o contraseña |
+| `GET` | `/api/products` | No | Catálogo público paginado (búsqueda y orden) |
+| `GET` | `/api/products/{id}` | No | Detalle de un producto disponible |
+| `GET` | `/api/admin/products` | JWT + `ADMIN` | Listado completo (incluye desactivados) |
+| `POST` | `/api/admin/products` | JWT + `ADMIN` | Crear producto |
+| `PUT` | `/api/admin/products/{id}` | JWT + `ADMIN` | Actualizar producto |
+| `DELETE` | `/api/admin/products/{id}` | JWT + `ADMIN` | Desactivar producto (soft delete) |
+| `PATCH` | `/api/admin/products/{id}/stock` | JWT + `ADMIN` | Ajustar stock absoluto |
 
 Detalle completo (bodies, códigos de error, ejemplos) en
 [docs/api.md](docs/api.md).

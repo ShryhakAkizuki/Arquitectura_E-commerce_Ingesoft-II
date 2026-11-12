@@ -6,8 +6,6 @@ import com.ingesoft.shop.dto.request.UpdateProfileRequest;
 import com.ingesoft.shop.dto.response.LoginResponse;
 import com.ingesoft.shop.dto.response.UserResponse;
 
-import com.ingesoft.shop.exception.BusinessException;
-
 /**
  * Reglas de negocio de autenticación
  */
