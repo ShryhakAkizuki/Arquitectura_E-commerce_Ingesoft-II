@@ -13,7 +13,7 @@ Tienda online con autenticación por roles (usuario/administrador), gestión CRU
 | # | Requerimiento | Módulo responsable | Evidencia | Estado |
 |---|---------------|--------------------|-----------|--------|
 | R1 | Autenticación y gestión de usuarios segura | `backend: auth` (JWT + BCrypt) | Endpoints `/api/auth/*`, `/api/users/me` | Implementado |
-| R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` con `@PreAuthorize("hasRole('ADMIN')")`; `orders` pendiente | Endpoints `/api/admin/products/**` (CRUD + stock) | Parcial (órdenes pendiente) |
+| R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` con `@PreAuthorize("hasRole('ADMIN')")`; `backend: orders` (gestión admin de órdenes con máquina de estados y restitución de stock) | Endpoints `/api/admin/products/**` (CRUD + stock), `GET /api/admin/orders`, `GET /api/admin/orders/{id}`, `PATCH /api/admin/orders/{id}/status` | Implementado |
 | R3 | Carrito y checkout fluidos | `backend: cart` (carrito persistente con validación de stock) + `backend: checkout` (`POST /api/checkout` transaccional con pago simulado); `frontend: cart/checkout` pendiente | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`, `POST /api/checkout` | Parcial (backend de carrito y checkout implementado; frontend pendiente) |
 | R4 | Validaciones de stock y pagos | `CartServiceImpl` valida stock en agregar/actualizar; `CheckoutServiceImpl` re-valida stock bajo bloqueo pesimista (`INSUFFICIENT_STOCK`, `CART_EMPTY`) y procesa el pago simulado (`PAYMENT_DECLINED` → orden `PENDING`) | Endpoints de carrito y de checkout + códigos `INSUFFICIENT_STOCK`, `CART_EMPTY`, `PAYMENT_DECLINED` | Implementado (backend) |
 | R5 | Interfaz clara de productos y detalles | `backend: catalog` (catálogo público); `frontend: catalog` pendiente | Endpoints `GET /api/products`, `GET /api/products/{id}` | Parcial (frontend pendiente) |
@@ -23,8 +23,6 @@ Tienda online con autenticación por roles (usuario/administrador), gestión CRU
 | Criterio | Cómo se cumple |
 |----------|----------------|
 | Buenas prácticas | Convenciones por capas, DTOs de entrada/salida, manejo global de errores, validación con Bean Validation, Checkstyle en el build |
-| SOLID | Mapa explícito + evidencias en [`solid-dry.md`](solid-dry.md) |
-| DRY | Reglas de negocio únicas en servicios, capa presentacional delgada, reutilización de componentes |
 | Sustentación | Arquitectura por capas, diagramas, ADRs en [`decisiones-adr.md`](decisiones-adr.md) y evidencias de código en [`solid-dry.md`](solid-dry.md) |
 | Pruebas unitarias | JUnit 5 + Mockito en backend, Vitest + RTL en frontend |
 
@@ -72,7 +70,7 @@ Controller → Service (interface) → Repository → Database
 ```
 
 - Los **controladores** solo traducen HTTP → DTO → servicio → HTTP. No contienen reglas de negocio.
-- Los **servicios** se programan contra **interfaces** (`IProductService`, `ICartService`, `ICheckoutService`, `IPaymentProvider`); la implementación se inyecta por el contenedor.
+- Los **servicios** se programan contra **interfaces** (`IProductService`, `ICartService`, `ICheckoutService`, `IOrderService`, `IOrderAdminService`, `IPaymentProvider`); la implementación se inyecta por el contenedor.
 - Los **repositorios** son la única capa que conoce a las entidades JPA. Los servicios devuelven DTOs hacia afuera (la entidad no "fuga" fuera de la capa de datos).
 - **Paginación y búsqueda** vía `Pageable` de Spring Data, no en el controlador.
 - **Calidad de código:** Checkstyle corre en la fase `validate` del build (severidad `warning` ya rompe el build), configuración en [`checkstyle.xml`](../backend/checkstyle.xml).
@@ -202,6 +200,8 @@ Base URL: `http://localhost:8080/api`. La referencia completa por endpoint con e
 | Products (admin) | `GET/POST /admin/products`, `PUT/DELETE /admin/products/{id}`, `PATCH /admin/products/{id}/stock` | Admin |
 | Cart | `GET /cart`, `POST /cart/items`, `PATCH /cart/items/{itemId}`, `DELETE /cart/items/{itemId}` | Usuario |
 | Checkout | `POST /checkout` | Usuario |
+| Orders (usuario) | `GET /orders/mine`, `GET /orders/mine/{id}` | Usuario |
+| Orders (admin) | `GET /admin/orders`, `GET /admin/orders/{id}`, `PATCH /admin/orders/{id}/status` | Admin |
 | Docs | `/swagger-ui.html` | Público |
 
 **Formato de error estándar** (todo el backend responde igual):
@@ -217,38 +217,27 @@ Base URL: `http://localhost:8080/api`. La referencia completa por endpoint con e
 
 Códigos de negocio: `EMAIL_ALREADY_REGISTERED`, `INVALID_CREDENTIALS`, `PRODUCT_NOT_FOUND`, `INSUFFICIENT_STOCK`, `CART_EMPTY`, `PAYMENT_DECLINED`, `ORDER_NOT_FOUND`, `FORBIDDEN`, `ORDER_STATUS_INVALID`.
 
-## 7. Mapa SOLID → código
 
-| Principio | Ejemplo en el proyecto | Elemento |
-|-----------|------------------------|----------|
-| **S**ingle Responsibility | `AuthController` solo traduce HTTP → DTO; `AuthServiceImpl` concentra las reglas de negocio; `JwtTokenProvider` solo emite/valida tokens; `CartServiceImpl` concentra las reglas del carrito (stock, acumulación, subtotal); `CheckoutServiceImpl` orquesta el flujo de compra; `PaymentServiceImpl` solo persiste el intento de pago; | `AuthController`, `AuthServiceImpl`, `JwtTokenProvider`, `CartServiceImpl`, `CheckoutServiceImpl`, `PaymentServiceImpl` |
-| **O**pen/Closed | `ErrorCode` crece por adición sin tocar el handler; `SimulatedPaymentProvider` se añade tras `IPaymentProvider` sin modificar `PaymentServiceImpl` (cambiar de pasarela = nueva implementación);| `ErrorCode`, `IPaymentProvider`, `SimulatedPaymentProvider` |
-| **L**iskov Substitution | `UserRepository` (Spring Data) es mockeable y `AuthServiceImpl` cumple el contrato completo;| `UserRepository`, `AuthServiceImpl`;|
-| **I**nterface Segregation | `IAuthService` (4 métodos de auth/perfil), `ICartService` (4 métodos de carrito), `ICheckoutService` (1 método), `IPaymentService` (1 método) y `IPaymentProvider` (1 método) son interfaces pequeñas y específicas;| `IAuthService`, `ICartService`, `ICheckoutService`, `IPaymentService`, `IPaymentProvider` |
-| **D**ependency Inversion | Inyección por constructor en `AuthController` → `IAuthService` → `UserRepository`/`PasswordEncoder` (interfaz); `SecurityConfig` inyecta `JwtAuthFilter`; `CheckoutServiceImpl` se programa contra `IPaymentService`, `TransactionTemplate` y repositorios (sin conocer a `SimulatedPaymentProvider`) | Todo el backend |
-
-> Evidencias con fragmentos de código real: [`solid-dry.md`](solid-dry.md) — cubre los módulos implementados (Auth, Users, Catálogo, Carrito, Checkout/Pagos, Seguridad y manejo de errores);
-
-## 8. Manejo de errores y calidad
+## 7. Manejo de errores y calidad
 
 - **Backend:** `@ControllerAdvice` global → excepciones de negocio (`BusinessException` con código) mapeadas al formato; `400` para validación, `401/403` para seguridad, `404` para no encontrado, `409` para conflictos de stock/estado, `402` para pago rechazado.
 - **Transaccionalidad:** `@Transactional` en operaciones que tocan stock+orden+pago (p. ej. `PaymentServiceImpl`); el checkout usa `TransactionTemplate` para delimitar el programa-todo-o-nada y lanzar el `402 PAYMENT_DECLINED` **fuera** de la transacción (la orden `PENDING` y el pago `FAILED` sí se persisten). Rollback automático ante cualquier excepción de negocio.
 - **Frontend:** interceptores centralizados de Axios, estados de carga/error/vacío en cada página de listado, mensajes de error del backend mostrados textualmente.
 - **Linters:** Checkstyle (backend, **ya activo** en la fase `validate` del build) + ESLint + Prettier.
 
-## 9. Estrategia de pruebas
+## 8. Estrategia de pruebas
 
 > Estrategia planificada: aún no hay tests en el repositorio; se escriben conforme se avanza por módulo.
 
 | Capa | Herramienta | Casos prioritarios |
 |------|-------------|--------------------|
-| Servicios backend | JUnit 5 + Mockito | `CartService`: stock insuficiente al agregar/actualizar (`INSUFFICIENT_STOCK`), acumulación de cantidad, subtotal correcto, ítem ajeno al carrito → 404; `CheckoutService`: stock insuficiente, pago rechazado (se conserva `PENDING`), éxito (stock descontado y carrito vacío); `PaymentService`: mapeo de estados; `ProductService`: validaciones de creación/actualización; `AuthService`: hash de contraseña y emisión de token |
+| Servicios backend | JUnit 5 + Mockito | `CartService`: stock insuficiente al agregar/actualizar (`INSUFFICIENT_STOCK`), acumulación de cantidad, subtotal correcto, ítem ajeno al carrito → 404; `CheckoutService`: stock insuficiente, pago rechazado (se conserva `PENDING`), éxito (stock descontado y carrito vacío); `OrderAdminService`: transición válida (`PAID → SHIPPED`), transición inválida → `ORDER_STATUS_INVALID` (`DELIVERED → SHIPPED`), cancelación `PAID → CANCELLED` repone el stock; `OrderService`: orden ajena al usuario → `ORDER_NOT_FOUND`; `PaymentService`: mapeo de estados; `ProductService`: validaciones de creación/actualización; `AuthService`: hash de contraseña y emisión de token |
 | API backend | Spring Boot Test + MockMvc | Contrato de `/auth/register`, `/checkout` (409/402/201), permisos admin (403 a usuario común) |
 | Componentes frontend | Vitest + React Testing Library | `ProductCard` (agregar al carrito), ítem de carrito (cambiar cantidad), `CheckoutPage` (formulario inválido, resultado de error) |
 
 Cada test documenta **arrangement–action–assertion** y el requerimiento que cubre (comentario `// R4:`) → evidencia directa para la sustentación.
 
-## 10. Riesgos y mitigaciones
+## 9. Riesgos y mitigaciones
 
 | Riesgo | Mitigación |
 |--------|-----------|

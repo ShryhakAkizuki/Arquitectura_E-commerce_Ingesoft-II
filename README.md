@@ -22,9 +22,10 @@ implementa.
 | **Catálogo** (listado público, detalle, CRUD + stock admin) | Endpoints `GET /api/products`, `GET /api/products/{id}`, `GET|POST|PUT|DELETE|PATCH /api/admin/products/**` |
 | **Carrito** (ver, agregar, cambiar cantidad, eliminar ítem) | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`; validación de stock `INSUFFICIENT_STOCK` |
 | **Checkout** (crear orden con pago simulado) | Endpoint `POST /api/checkout`; transaccional con bloqueos pesimistas (`SELECT ... FOR UPDATE`) contra sobreventa; pago simulado con tarjeta de rechazo configurable; la orden queda `PENDING` si el pago se rechaza |
+| **Órdenes** (consultar las propias y gestión admin) | Endpoints `GET /api/orders/mine`, `GET /api/orders/mine/{id}` (usuario) y `GET /api/admin/orders`, `GET /api/admin/orders/{id}`, `PATCH /api/admin/orders/{id}/status` (admin); máquina de estados `PENDING → PAID → SHIPPED → DELIVERED` (+ `CANCELLED`); restitución de stock al cancelar una orden `PAID` |
 | **Seguridad** (Spring Security, roles, filtros JWT, errores 401/403) | Política de rutas por rol en [`SecurityConfig.java`](backend/src/main/java/com/ingesoft/shop/config/SecurityConfig.java) |
 | **Excepciones globales** (contrato de error `ApiError` + `ErrorCode`) | [`GlobalExceptionHandler.java`](backend/src/main/java/com/ingesoft/shop/exception/GlobalExceptionHandler.java) |
-| **Documentación** (arquitectura, API, ADRs, SOLID/DRY) | Carpeta [`docs/`](docs) |
+| **Documentación** (arquitectura, API) | Carpeta [`docs/`](docs) |
 
 ---
 
@@ -33,9 +34,7 @@ implementa.
 | Documento | Contenido |
 |-----------|-----------|
 | [docs/arquitectura.md](docs/arquitectura.md) | Visión de conjunto, capas, flujo de una petición, estado por módulo |
-| [docs/api.md](docs/api.md) | Endpoints implementados (Auth, Users, Products, Carrito, Checkout), contrato de errores, credenciales demo |
-| [docs/decisiones-adr.md](docs/decisiones-adr.md) | Decisiones de arquitectura registradas (ADR-001 – ADR-006, ADR-011 – ADR-015) |
-| [docs/solid-dry.md](docs/solid-dry.md) | Evidencias de principios SOLID y DRY en el código implementado |
+| [docs/api.md](docs/api.md) | Endpoints implementados (Auth, Users, Products, Carrito, Checkout, Órdenes), contrato de errores, credenciales demo |
 
 Documentación interactiva de la API (Swagger UI, disponible al ejecutar el backend):
 <http://localhost:8080/swagger-ui.html>
@@ -85,9 +84,7 @@ Arquitectura_E-commerce_Ingesoft-II/
 ├── README.md
 ├── docs/                         # Documentación del proyecto
 │   ├── api.md
-│   ├── arquitectura.md
-│   ├── decisiones-adr.md
-│   └── solid-dry.md
+│   └── arquitectura.md
 ├── scripts/
 │   └── .gitkeep
 ├── frontend/                     # Frontend (por implementar)
@@ -105,10 +102,12 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │   │   ├── CorsConfig.java             # CORS para el frontend (localhost:5173)
         │   │   │   └── SecurityConfig.java         # Política de rutas y roles, BCrypt, 401/403
         │   │   ├── controller/
+        │   │   │   ├── AdminOrderController.java
         │   │   │   ├── AdminProductController.java
         │   │   │   ├── AuthController.java
         │   │   │   ├── CartController.java
         │   │   │   ├── CheckoutController.java
+        │   │   │   ├── OrderController.java
         │   │   │   ├── ProductController.java
         │   │   │   └── UserController.java
         │   │   ├── dto/
@@ -121,11 +120,13 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │   │   │   ├── ProductRequest.java
         │   │   │   │   ├── RegisterRequest.java
         │   │   │   │   ├── UpdateCartItemRequest.java
+        │   │   │   │   ├── UpdateOrderStatusRequest.java
         │   │   │   │   └── UpdateProfileRequest.java
         │   │   │   └── response/
         │   │   │       ├── CartItemResponse.java
         │   │   │       ├── CartResponse.java
         │   │   │       ├── LoginResponse.java
+        │   │   │       ├── OrderDetailResponse.java
         │   │   │       ├── OrderResponse.java
         │   │   │       ├── ProductResponse.java
         │   │   │       └── UserResponse.java
@@ -162,6 +163,8 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │       ├── IAuthService.java
         │   │       ├── ICartService.java
         │   │       ├── ICheckoutService.java
+        │   │       ├── IOrderAdminService.java
+        │   │       ├── IOrderService.java
         │   │       ├── IPaymentService.java
         │   │       ├── IProductAdminService.java
         │   │       ├── IProductService.java
@@ -169,10 +172,12 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │       │   ├── AuthServiceImpl.java
         │   │       │   ├── CartServiceImpl.java
         │   │       │   ├── CheckoutServiceImpl.java
+        │   │       │   ├── OrderAdminServiceImpl.java
+        │   │       │   ├── OrderServiceImpl.java
         │   │       │   ├── PaymentServiceImpl.java
         │   │       │   ├── ProductAdminServiceImpl.java
         │   │       │   └── ProductServiceImpl.java
-        │   │       └── payment/                  # Abstracción de la pasarela de pago
+        │   │       └── payment/
         │   │           ├── IPaymentProvider.java
         │   │           ├── PaymentResult.java
         │   │           └── SimulatedPaymentProvider.java
@@ -332,6 +337,11 @@ sirven para demostrar `402 PAYMENT_DECLINED` (la orden queda `PENDING`).
 | `PATCH` | `/api/cart/items/{itemId}` | JWT | Cambiar la cantidad absoluta de un ítem |
 | `DELETE` | `/api/cart/items/{itemId}` | JWT | Eliminar un ítem del carrito |
 | `POST` | `/api/checkout` | JWT | Crear orden con pago simulado; descuenta stock y vacía el carrito si el pago se confirma |
+| `GET` | `/api/orders/mine` | JWT | Órdenes del usuario autenticado, paginadas (recientes primero) |
+| `GET` | `/api/orders/mine/{id}` | JWT | Detalle de una orden propia (ítems + pago) |
+| `GET` | `/api/admin/orders` | JWT + `ADMIN` | Listado de órdenes, paginado, con filtro opcional por `status` |
+| `GET` | `/api/admin/orders/{id}` | JWT + `ADMIN` | Detalle de una orden (ítems + pago) |
+| `PATCH` | `/api/admin/orders/{id}/status` | JWT + `ADMIN` | Avanzar el estado según la máquina de estados; reponer stock al cancelar desde `PAID` |
 
 Detalle completo (bodies, códigos de error, ejemplos) en
 [docs/api.md](docs/api.md).

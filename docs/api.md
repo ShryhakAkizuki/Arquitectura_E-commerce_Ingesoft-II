@@ -16,6 +16,8 @@
    - [4.4 Products (gestión admin)](#44-products-gestión-admin)
    - [4.5 Cart (carrito de compras)](#45-cart-carrito-de-compras)
    - [4.6 Checkout (compra con pago simulado)](#46-checkout-compra-con-pago-simulado)
+   - [4.7 Orders (consultas del usuario)](#47-orders-consultas-del-usuario)
+   - [4.8 Orders (gestión admin)](#48-orders-gestión-admin)
 5. [Referencias](#5-referencias)
 
 ---
@@ -95,7 +97,7 @@ generado por [`GlobalExceptionHandler.java`](../backend/src/main/java/com/ingeso
 | 403 | No autorizado | Usuario sin el rol requerido sobre la ruta |
 | 404 | No encontrado | Ruta inexistente; usuario inexistente; producto inexistente en catálogo o en el carrito durante el checkout |
 | 405 | Método no permitido | Método HTTP no soportado sobre la ruta |
-| 409 | Conflicto | Email ya registrado (registro o cambio de perfil); carrito vacío al hacer checkout; stock insuficiente en carrito o checkout |
+| 409 | Conflicto | Email ya registrado (registro o cambio de perfil); carrito vacío al hacer checkout; stock insuficiente en carrito o checkout; transición de estado de orden no permitida |
 | 500 | Error interno | Fallo no controlado (última línea de defensa; el detalle solo va a log) |
 
 ---
@@ -116,6 +118,8 @@ Estado actual de [`ErrorCode.java`](../backend/src/main/java/com/ingesoft/shop/e
 | `FORBIDDEN` | 403 | Rol insuficiente para la ruta |
 | `VALIDATION_ERROR` | 400 | Validación de entrada fallida (bean validation / parámetros) |
 | `NOT_FOUND` | 404 | Ruta no existe, usuario inexistente, o ítem de carrito inexistente / ajeno al carrito del usuario |
+| `ORDER_NOT_FOUND` | 404 | Orden inexistente, o orden ajena al usuario del token al consultar sus órdenes (se responde igual para no revelar existencias) |
+| `ORDER_STATUS_INVALID` | 409 | Transición de estado de orden no permitida por la máquina de estados (ver [4.8](#48-orders-gestión-admin)) |
 | `METHOD_NOT_ALLOWED` | 405 | Método HTTP no permitido sobre la ruta |
 | `INTERNAL_ERROR` | 500 | Última línea de defensa para fallos no controlados |
 
@@ -637,6 +641,211 @@ curl -X POST http://localhost:8080/api/checkout \
 (entró una compra concurrente y el stock ya no alcanza) ·
 `402 PAYMENT_DECLINED` (la pasarela simulada rechazó la tarjeta; la orden
 queda `PENDING` y su `orderNumber` viene en el `message` del error)
+
+---
+
+### 4.7 Orders (consultas del usuario)
+
+Controller: [`OrderController.java`](../backend/src/main/java/com/ingesoft/shop/controller/OrderController.java)
+· Servicio: [`OrderServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/OrderServiceImpl.java)
+
+**Autenticación: JWT (cualquier rol)** — el usuario se deriva del email del
+token (`Authentication.getName()`); el `id` del usuario **nunca** viaja por la
+URL ni por el body.
+
+**Comportamiento general:**
+
+- Solo expone las órdenes del propio usuario: la consulta
+  `findByUserIdAndId` combina ambos criterios, de modo que una orden inexistente
+  y una orden ajena se responden igual (`404 ORDER_NOT_FOUND`, sin revelar
+  existencias ajenas).
+- El listado siempre va ordenado por `createdAt` descendente (la más reciente
+  primero).
+- El detalle incluye el pago asociado cuando existe (`payment: null` si la
+  orden aún no tiene registro de pago).
+
+#### `GET /api/orders/mine` — mis órdenes
+
+**Parámetros de consulta:**
+
+| Parámetro | Tipo | Default | Descripción |
+|-----------|------|---------|-------------|
+| `page` | int | `0` | Índice de página (0-based) |
+| `size` | int | `10` | Elementos por página |
+
+**Respuesta `200 OK`:** `Page<OrderResponse>` (misma forma que
+[`OrderResponse`](../backend/src/main/java/com/ingesoft/shop/dto/response/OrderResponse.java)
+del checkout; sin el campo `payment`):
+
+```json
+{
+  "content": [
+    {
+      "id": "b7e2c4d8-9a1f-4c3e-8d2b-5f6a7c8d9e0f",
+      "orderNumber": "ORD-1A2B3C4D",
+      "status": "PAID",
+      "subtotal": 259800.00,
+      "shipping": 5000.00,
+      "total": 264800.00,
+      "shippingAddress": "Calle 45 # 12-30, Bogotá",
+      "createdAt": "2026-11-12T03:00:00Z",
+      "items": [
+        {
+          "productId": "00000000-0000-0000-0000-000000000105",
+          "productName": "Cable USB-C 100W",
+          "unitPrice": 129900.00,
+          "quantity": 2,
+          "lineTotal": 259800.00
+        }
+      ]
+    }
+  ],
+  "totalElements": 1,
+  "totalPages": 1,
+  "size": 10,
+  "number": 0,
+  "first": true,
+  "last": true,
+  "numberOfElements": 1,
+  "empty": false
+}
+```
+
+**Errores:** `400 VALIDATION_ERROR` (`page`/`size` no numéricos) ·
+`401 UNAUTHORIZED` · `404 NOT_FOUND` (token válido pero el usuario ya no existe)
+
+---
+
+#### `GET /api/orders/mine/{id}` — detalle de una orden propia
+
+**Parámetros de ruta:** `id` (UUID de la orden)
+
+**Respuesta `200 OK`:** `OrderDetailResponse`
+
+```json
+{
+  "id": "b7e2c4d8-9a1f-4c3e-8d2b-5f6a7c8d9e0f",
+  "orderNumber": "ORD-1A2B3C4D",
+  "status": "PAID",
+  "subtotal": 259800.00,
+  "shipping": 5000.00,
+  "total": 264800.00,
+  "shippingAddress": "Calle 45 # 12-30, Bogotá",
+  "createdAt": "2026-11-12T03:00:00Z",
+  "items": [
+    {
+      "productId": "00000000-0000-0000-0000-000000000105",
+      "productName": "Cable USB-C 100W",
+      "unitPrice": 129900.00,
+      "quantity": 2,
+      "lineTotal": 259800.00
+    }
+  ],
+  "payment": {
+    "status": "CONFIRMED",
+    "method": "card",
+    "transactionId": "SIM-7c9e4a1d-2b3f-4e5a-9c6d-8e7f0a1b2c3d",
+    "failureReason": null,
+    "processedAt": "2026-11-12T03:00:00Z"
+  }
+}
+```
+
+**Errores:** `401 UNAUTHORIZED` · `404 NOT_FOUND` (token válido pero el usuario
+ya no existe) · `404 ORDER_NOT_FOUND` (orden inexistente **o** ajena al usuario
+del token)
+
+---
+
+### 4.8 Orders (gestión admin)
+
+Controller: [`AdminOrderController.java`](../backend/src/main/java/com/ingesoft/shop/controller/AdminOrderController.java)
+· Servicio: [`OrderAdminServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/OrderAdminServiceImpl.java)
+
+**Autenticación: JWT + rol `ADMIN`** (`@PreAuthorize("hasRole('ADMIN')")` a
+nivel de clase). Un usuario autenticado con rol `USER` recibe
+`403 FORBIDDEN`; sin token (o inválido), `401 UNAUTHORIZED`.
+
+**Comportamiento general:**
+
+- El listado y el detalle son **read-only**; el único cambio de estado se hace
+  con `PATCH /{id}/status`.
+- **Máquina de estados** (validada en
+  [`OrderAdminServiceImpl.validateTransition`](../backend/src/main/java/com/ingesoft/shop/service/impl/OrderAdminServiceImpl.java)):
+
+  | Desde | Transiciones permitidas |
+  |-------|-------------------------|
+  | `PENDING` | `CANCELLED` |
+  | `PAID` | `SHIPPED`, `CANCELLED` |
+  | `SHIPPED` | `DELIVERED` |
+  | `DELIVERED` / `CANCELLED` | ninguna (estados terminales) |
+
+  Cualquier otra combinación responde `409 ORDER_STATUS_INVALID` (p. ej.
+  `DELIVERED → SHIPPED` o `PENDING → PAID`: el paso a `PAID` solo ocurre vía
+  checkout al confirmar el pago).
+- **Restitución de stock:** al cancelar desde `PAID` (`PAID → CANCELLED`), la
+  cantidad de cada ítem se suma de nuevo al stock de su producto
+  (`stock += quantity`). Cancelar desde `PENDING` **no** toca el stock (nunca
+  se descontó).
+
+#### `GET /api/admin/orders` — listado de órdenes
+
+**Parámetros de consulta:**
+
+| Parámetro | Tipo | Default | Descripción |
+|-----------|------|---------|-------------|
+| `page` | int | `0` | Índice de página (0-based) |
+| `size` | int | `10` | Elementos por página |
+| `status` | enum | — | Filtro opcional por [`OrderStatus`](../backend/src/main/java/com/ingesoft/shop/enums/OrderStatus.java): `PENDING`, `PAID`, `SHIPPED`, `DELIVERED`, `CANCELLED`. Sin el parámetro devuelve todas |
+
+**Respuesta `200 OK`:** `Page<OrderResponse>` (misma forma que
+[4.7](#47-orders-consultas-del-usuario)), ordenado por `createdAt` descendente.
+
+**Errores:** `400 VALIDATION_ERROR` (`page`/`size` no numéricos o `status`
+inválido) · `401 UNAUTHORIZED` · `403 FORBIDDEN`
+
+---
+
+#### `GET /api/admin/orders/{id}` — detalle de una orden
+
+**Parámetros de ruta:** `id` (UUID de la orden)
+
+**Respuesta `200 OK`:** `OrderDetailResponse` (misma forma que
+[4.7](#get-apiordersmineid--detalle-de-una-orden-propia)).
+
+**Errores:** `401 UNAUTHORIZED` · `403 FORBIDDEN` · `404 ORDER_NOT_FOUND`
+
+---
+
+#### `PATCH /api/admin/orders/{id}/status` — cambiar el estado
+
+**Parámetros de ruta:** `id` (UUID de la orden)
+
+**Body** ([`UpdateOrderStatusRequest`](../backend/src/main/java/com/ingesoft/shop/dto/request/UpdateOrderStatusRequest.java)):
+
+| Campo | Tipo | Restricciones |
+|-------|------|---------------|
+| `status` | enum | requerido (`@NotNull`), uno de los valores de `OrderStatus` |
+
+```json
+{ "status": "SHIPPED" }
+```
+
+```bash
+curl -X PATCH http://localhost:8080/api/admin/orders/<orderId> \
+  -H "Authorization: Bearer <token-admin>" \
+  -H "Content-Type: application/json" \
+  -d '{ "status": "SHIPPED" }'
+```
+
+**Respuesta `200 OK`:** `OrderDetailResponse` con el estado ya actualizado
+(solo se modifica la fila de la orden — y, en su caso, el stock de los
+productos — dentro de una transacción).
+
+**Errores:** `400 VALIDATION_ERROR` (`status` ausente o valor no válido del
+enum) · `401 UNAUTHORIZED` · `403 FORBIDDEN` · `404 ORDER_NOT_FOUND` ·
+`409 ORDER_STATUS_INVALID` (transición no permitida; el `message` incluye el
+paso intentado, p. ej. `Transición de estado no permitida: DELIVERED → SHIPPED`)
 
 ---
 
