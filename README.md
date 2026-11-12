@@ -20,6 +20,7 @@ implementa.
 | **Esquema de BD completo** (users, products, carts, cart_items, orders, order_items, payments) | [`V1__init.sql`](backend/src/main/resources/db/migration/V1__init.sql) + seed demo en [`V2__seed.sql`](backend/src/main/resources/db/migration/V2__seed.sql) |
 | **Auth** (registro, login, JWT, perfil propio) | Endpoints `POST /api/auth/register`, `POST /api/auth/login`, `GET /api/users/me`, `PUT /api/users/me` |
 | **Catálogo** (listado público, detalle, CRUD + stock admin) | Endpoints `GET /api/products`, `GET /api/products/{id}`, `GET|POST|PUT|DELETE|PATCH /api/admin/products/**` |
+| **Carrito** (ver, agregar, cambiar cantidad, eliminar ítem) | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`; validación de stock `INSUFFICIENT_STOCK` |
 | **Seguridad** (Spring Security, roles, filtros JWT, errores 401/403) | Política de rutas por rol en [`SecurityConfig.java`](backend/src/main/java/com/ingesoft/shop/config/SecurityConfig.java) |
 | **Excepciones globales** (contrato de error `ApiError` + `ErrorCode`) | [`GlobalExceptionHandler.java`](backend/src/main/java/com/ingesoft/shop/exception/GlobalExceptionHandler.java) |
 | **Documentación** (arquitectura, API, ADRs, SOLID/DRY) | Carpeta [`docs/`](docs) |
@@ -31,8 +32,8 @@ implementa.
 | Documento | Contenido |
 |-----------|-----------|
 | [docs/arquitectura.md](docs/arquitectura.md) | Visión de conjunto, capas, flujo de una petición, estado por módulo |
-| [docs/api.md](docs/api.md) | Endpoints implementados (Auth, Users, Products), contrato de errores, credenciales demo |
-| [docs/decisiones-adr.md](docs/decisiones-adr.md) | Decisiones de arquitectura registradas (ADR-001 … ADR-010) |
+| [docs/api.md](docs/api.md) | Endpoints implementados (Auth, Users, Products, Carrito), contrato de errores, credenciales demo |
+| [docs/decisiones-adr.md](docs/decisiones-adr.md) | Decisiones de arquitectura registradas (ADR-001 – ADR-006, ADR-011 – ADR-014) |
 | [docs/solid-dry.md](docs/solid-dry.md) | Evidencias de principios SOLID y DRY en el código implementado |
 
 Documentación interactiva de la API (Swagger UI, disponible al ejecutar el backend):
@@ -103,22 +104,29 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │   │   ├── CorsConfig.java             # CORS para el frontend (localhost:5173)
         │   │   │   └── SecurityConfig.java         # Política de rutas y roles, BCrypt, 401/403
         │   │   ├── controller/
-        │   │   │   ├── AdminProductController.java     
+        │   │   │   ├── AdminProductController.java
         │   │   │   ├── AuthController.java
+        │   │   │   ├── CartController.java
         │   │   │   ├── ProductController.java
         │   │   │   └── UserController.java
         │   │   ├── dto/
         │   │   │   ├── request/
+        │   │   │   │   ├── AddCartItemRequest.java
         │   │   │   │   ├── AdjustStockRequest.java
         │   │   │   │   ├── LoginRequest.java
         │   │   │   │   ├── ProductRequest.java
         │   │   │   │   ├── RegisterRequest.java
+        │   │   │   │   ├── UpdateCartItemRequest.java
         │   │   │   │   └── UpdateProfileRequest.java
         │   │   │   └── response/
+        │   │   │       ├── CartItemResponse.java
+        │   │   │       ├── CartResponse.java
         │   │   │       ├── LoginResponse.java
         │   │   │       ├── ProductResponse.java
         │   │   │       └── UserResponse.java
         │   │   ├── entity/
+        │   │   │   ├── Cart.java
+        │   │   │   ├── CartItem.java
         │   │   │   ├── Product.java
         │   │   │   └── User.java
         │   │   ├── enums/
@@ -131,6 +139,8 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │   │   ├── ErrorCode.java
         │   │   │   └── GlobalExceptionHandler.java
         │   │   ├── repository/
+        │   │   │   ├── CartItemRepository.java
+        │   │   │   ├── CartRepository.java
         │   │   │   ├── ProductRepository.java
         │   │   │   └── UserRepository.java
         │   │   ├── security/
@@ -139,10 +149,12 @@ Arquitectura_E-commerce_Ingesoft-II/
         │   │   │   └── JwtTokenProvider.java(HS256)
         │   │   └── service/
         │   │       ├── IAuthService.java
+        │   │       ├── ICartService.java
         │   │       ├── IProductAdminService.java
         │   │       ├── IProductService.java
         │   │       └── impl/
         │   │           ├── AuthServiceImpl.java
+        │   │           ├── CartServiceImpl.java
         │   │           ├── ProductAdminServiceImpl.java
         │   │           └── ProductServiceImpl.java
         │   └── resources/
@@ -271,8 +283,9 @@ inserta de forma determinista (hashes BCrypt precomputados):
 | Administrador | `admin@demo.com` | `Admin123!` |
 | Usuario | `user@demo.com` | `User123!` |
 
-También se insertan 8 productos demo (precios en COP, uno con stock bajo para
-probar `INSUFFICIENT_STOCK` en el futuro módulo de carrito).
+También se insertan 8 productos demo (precios en COP; el de stock bajo,
+`Cable USB-C 100W`, sirve para demostrar `409 INSUFFICIENT_STOCK` al agregarlo
+al carrito).
 
 ---
 
@@ -291,6 +304,10 @@ probar `INSUFFICIENT_STOCK` en el futuro módulo de carrito).
 | `PUT` | `/api/admin/products/{id}` | JWT + `ADMIN` | Actualizar producto |
 | `DELETE` | `/api/admin/products/{id}` | JWT + `ADMIN` | Desactivar producto (soft delete) |
 | `PATCH` | `/api/admin/products/{id}/stock` | JWT + `ADMIN` | Ajustar stock absoluto |
+| `GET` | `/api/cart` | JWT | Carrito del usuario (se crea si no existe) |
+| `POST` | `/api/cart/items` | JWT | Agregar producto (acumula la cantidad si ya está en el carrito) |
+| `PATCH` | `/api/cart/items/{itemId}` | JWT | Cambiar la cantidad absoluta de un ítem |
+| `DELETE` | `/api/cart/items/{itemId}` | JWT | Eliminar un ítem del carrito |
 
 Detalle completo (bodies, códigos de error, ejemplos) en
 [docs/api.md](docs/api.md).

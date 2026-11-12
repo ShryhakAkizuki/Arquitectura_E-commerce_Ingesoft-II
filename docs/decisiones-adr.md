@@ -15,6 +15,7 @@ Registro de decisiones técnicas del proyecto.
 | ADR-011 | Seed determinístico con hashes BCrypt precomputados |
 | ADR-012 | Checkstyle en la fase `validate` del build (falla el build ante violación) |
 | ADR-013 | Catálogo: lectura pública / gestión admin separadas, soft delete y stock absoluto |
+| ADR-014 | Carrito persistente único por usuario, precio capturado al agregar y cantidad acumulada |
 
 ---
 
@@ -177,3 +178,29 @@ Registro de decisiones técnicas del proyecto.
 - (+) Añadir un campo o una regla al catálogo no obliga a tocar el controlador público si es una regla de admin, y viceversa.
 - (−) `DELETE` no libera espacio en la tabla: los productos desactivados siguen ocupando filas (coste despreciable en la escala del MVP y necesario para el historial de órdenes).
 - (−) El stock absoluto descarta ajustes concurrentes tipo "quitar 1 unidad" (lo resolverá el checkout con decremento atómico al confirmar la orden, módulo pendiente).
+
+---
+
+## ADR-014 · Carrito persistente único por usuario, precio capturado al agregar y cantidad acumulada
+
+[`Cart.java`](../backend/src/main/java/com/ingesoft/shop/entity/Cart.java), [`CartItem.java`](../backend/src/main/java/com/ingesoft/shop/entity/CartItem.java), [`ICartService.java`](../backend/src/main/java/com/ingesoft/shop/service/ICartService.java), [`CartServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/CartServiceImpl.java), [`CartController.java`](../backend/src/main/java/com/ingesoft/shop/controller/CartController.java), [`CartRepository.java`](../backend/src/main/java/com/ingesoft/shop/repository/CartRepository.java), [`V1__init.sql`](../backend/src/main/resources/db/migration/V1__init.sql) (`carts`, `cart_items`)
+
+**Contexto:** R3 exige un carrito fluido y R4 validaciones de stock. El carrito debe sobrevivir recargas y reinicios (el usuario no pierde su selección), cada usuario debe tener a lo sumo **un** carrito, y el módulo de checkout (pendiente) debe poder re-validar precio y stock sin que el carrito haya envejecido mal.
+
+**Decisión:**
+- **Persistencia JPA, no sesion/cookie:** el carrito vive en `carts` (1:1 con `users`, `user_id` único) y `cart_items` (N:1 con `carts` y `products`). Se recupera por el email del token JWT, por lo que no depende de dispositivos ni de cookies.
+- **Crear bajo demanda:** `GET /api/cart` crea el carrito si el usuario aún no tiene uno (`save` solo la primera vez). El cliente nunca ve un "carrito no inicializado".
+- **Un solo ítem por producto (restricción única `uq_cart_items_cart_product`):** re-agregar un producto que ya está en el carrito **acumula** la cantidad en lugar de duplicar la fila; la cantidad se actualiza con `setQuantity` y la restricción de BD es la red de seguridad contra duplicados.
+- **Precio capturado al momento de agregar (`unit_price`):** cada ítem conserva el `price` del producto en el instante de agregación. Si el admin cambia el precio después, el carrito no se modifica solo (coherencia con ADR-008); el checkout re-valida precio y stock antes de confirmar.
+- **Subtotal derivado, nunca almacenado:** `Cart.getSubtotal()` suma `unitPrice × quantity` de los ítems en memoria; no hay columna de subtotal que mantener sincronizada.
+- **Stock validado en la capa de servicio:** `CartServiceImpl` compara la cantidad solicitada contra `Product.stock` al agregar y al actualizar, y lanza `INSUFFICIENT_STOCK` (409) si no alcanza (incluida la cantidad acumulada). La entidad `CartItem` solo valida `quantity > 0`; la regla de stock **no** vive en la entidad (separación de responsabilidades, ver S en [`solid-dry.md`](solid-dry.md)).
+- **Aislamiento por usuario:** cada operación resuelve el carrito por el email del token; un `itemId` ajeno al carrito del usuario responde `404 NOT_FOUND` (no `403`), para no revelar la existencia de ítems ajenos.
+- **Interfaz pequeña:** `ICartService` expone 4 métodos (`get`, `add`, `updateQuantity`, `remove`), todos devuelven `CartResponse`; el controlador depende solo de esa interfaz.
+
+**Consecuencias:**
+- (+) El carrito persiste entre sesiones y dispositivos; el estado de compra no depende del cliente.
+- (+) Sin columna de subtotal y sin duplicados de ítems: menos invariantes que mantener y menos superficie de bug.
+- (+) El checkout futuro solo debe re-validar `unit_price`/`stock` contra el producto actual y descontar atómicamente; el carrito ya le entrega precios y cantidades consistentes.
+- (+) La restricción única de BD protege la invariant de un-ítem-por-producto incluso si un cambio de código la violara.
+- (−) El precio en el carrito puede quedar desfasado del precio vigente hasta que el checkout lo re-valide (comportamiento documentado, coherente con ADR-008/009).
+- (−) La lectura del carrito por email exige pasar por `UserRepository` en cada operación (coste despreciable en la escala del MVP).

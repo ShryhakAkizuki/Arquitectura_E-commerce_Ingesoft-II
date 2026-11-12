@@ -14,8 +14,8 @@
    - [4.2 Users](#42-users)
    - [4.3 Products (catálogo público)](#43-products-catálogo-público)
    - [4.4 Products (gestión admin)](#44-products-gestión-admin)
-5. [Rutas reservadas (módulos en desarrollo)](#5-rutas-reservadas-módulos-en-desarrollo)
-6. [Referencias](#6-referencias)
+   - [4.5 Cart (carrito de compras)](#45-cart-carrito-de-compras)
+5. [Referencias](#5-referencias)
 
 ---
 
@@ -107,11 +107,12 @@ Estado actual de [`ErrorCode.java`](../backend/src/main/java/com/ingesoft/shop/e
 |--------|------|--------|
 | `EMAIL_ALREADY_REGISTERED` | 409 | Registro o cambio de email con email ya existente |
 | `INVALID_CREDENTIALS` | 401 | Login con email/contraseña incorrectos |
-| `PRODUCT_NOT_FOUND` | 404 | Producto inexistente (para el público: igual si está desactivado) |
+| `PRODUCT_NOT_FOUND` | 404 | Producto inexistente (para el público: igual si está desactivado); al agregarlo al carrito |
+| `INSUFFICIENT_STOCK` | 409 | Stock insuficiente al agregar o actualizar la cantidad de un ítem del carrito |
 | `UNAUTHORIZED` | 401 | Token ausente, inválido o expirado |
 | `FORBIDDEN` | 403 | Rol insuficiente para la ruta |
 | `VALIDATION_ERROR` | 400 | Validación de entrada fallida (bean validation / parámetros) |
-| `NOT_FOUND` | 404 | Ruta no existe o usuario inexistente |
+| `NOT_FOUND` | 404 | Ruta no existe, usuario inexistente, o ítem de carrito inexistente / ajeno al carrito del usuario |
 | `METHOD_NOT_ALLOWED` | 405 | Método HTTP no permitido sobre la ruta |
 | `INTERNAL_ERROR` | 500 | Última línea de defensa para fallos no controlados |
 
@@ -407,7 +408,113 @@ trazabilidad de órdenes futuras que referencian el producto (ver ADR-008).
 
 ---
 
-## 6. Referencias
+### 4.5 Cart (carrito de compras)
+
+Controller: [`CartController.java`](../backend/src/main/java/com/ingesoft/shop/controller/CartController.java)
+· Servicio: [`CartServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/CartServiceImpl.java)
+
+**Autenticación: JWT (cualquier rol)** — el carrito opera siempre sobre el
+usuario del token.
+
+**Comportamiento general:**
+
+- El carrito es **persistente** (tablas `carts` / `cart_items`) y **único por
+  usuario** (`OneToOne` con restricción única sobre `user_id`).
+- `GET /api/cart` **crea el carrito si no existe**: el usuario siempre tiene
+  un carrito disponible.
+- El **subtotal no se almacena**: se calcula en memoria como la suma de
+  `unitPrice × quantity` de los ítems.
+- La **cantidad se acumula**: agregar un producto que ya está en el carrito
+  suma las cantidades en lugar de duplicar el ítem (restricción única
+  `cart_id + product_id`).
+- El precio del ítem se captura del producto **en el momento de agregarlo**
+  (ADR-009); el stock se re-valida en el futuro checkout.
+- **Aislamiento de ítems:** `PATCH`/`DELETE` verifican que el ítem pertenece
+  al carrito del usuario del token; si no, se responde `404 NOT_FOUND` (no se
+  revela la existencia de ítems ajenos).
+
+#### `GET /api/cart` — ver el carrito
+
+**Respuesta `200 OK`:** `CartResponse`
+
+```json
+{
+  "id": "9d4e7f3a-5b2c-4a1e-8f0d-1a2b3c4d5e6f",
+  "items": [
+    {
+      "id": "c8a1b2d3-0f9e-4c7d-a6b5-4e3d2c1b0a9f",
+      "productId": "00000000-0000-0000-0000-000000000105",
+      "productName": "Cable USB-C 100W",
+      "imageUrl": "/img/productos/cable-usbc.webp",
+      "unitPrice": 129900.00,
+      "quantity": 2,
+      "lineTotal": 259800.00
+    }
+  ],
+  "subtotal": 259800.00
+}
+```
+
+**Errores:** `401 UNAUTHORIZED`
+
+---
+
+#### `POST /api/cart/items` — agregar producto al carrito
+
+**Body** ([`AddCartItemRequest`](../backend/src/main/java/com/ingesoft/shop/dto/request/AddCartItemRequest.java)):
+
+| Campo | Tipo | Restricciones |
+|-------|------|---------------|
+| `productId` | UUID | requerido, debe existir y estar disponible |
+| `quantity` | int | requerido, mayor que 0 |
+
+```bash
+curl -X POST http://localhost:8080/api/cart/items \
+  -H "Authorization: Bearer <token>" \
+  -H "Content-Type: application/json" \
+  -d '{"productId": "00000000-0000-0000-0000-000000000105", "quantity": 2}'
+```
+
+**Respuesta `201 Created`:** `CartResponse` completo con la cantidad
+acumulada si el producto ya estaba en el carrito.
+
+**Errores:** `400 VALIDATION_ERROR` · `401 UNAUTHORIZED` ·
+`404 PRODUCT_NOT_FOUND` (producto inexistente **o** desactivado) ·
+`409 INSUFFICIENT_STOCK` (el stock disponible del producto es menor que la
+cantidad solicitada, o no alcanza para la cantidad acumulada)
+
+---
+
+#### `PATCH /api/cart/items/{itemId}` — cambiar la cantidad de un ítem
+
+**Parámetros de ruta:** `itemId` (UUID)
+
+**Body** ([`UpdateCartItemRequest`](../backend/src/main/java/com/ingesoft/shop/dto/request/UpdateCartItemRequest.java)):
+
+| Campo | Tipo | Restricciones |
+|-------|------|---------------|
+| `quantity` | int | requerido, mayor que 0. Es el valor **absoluto** (no un delta) |
+
+**Respuesta `200 OK`:** `CartResponse` con la cantidad actualizada.
+
+**Errores:** `400 VALIDATION_ERROR` · `401 UNAUTHORIZED` ·
+`404 NOT_FOUND` (ítem inexistente, o de otro usuario/carrito) ·
+`409 INSUFFICIENT_STOCK`
+
+---
+
+#### `DELETE /api/cart/items/{itemId}` — eliminar un ítem
+
+**Parámetros de ruta:** `itemId` (UUID)
+
+**Respuesta `200 OK`:** `CartResponse` con el ítem eliminado.
+
+**Errores:** `401 UNAUTHORIZED` · `404 NOT_FOUND` (ítem inexistente,
+o de otro usuario/carrito)
+
+---
+
+## 5. Referencias
 
 - Diseño completo y flujo de checkout: [`arquitectura.md`](arquitectura.md)
 - Decisiones relacionadas (JWT, pago simulado, soft delete): [`decisiones-adr.md`](decisiones-adr.md)

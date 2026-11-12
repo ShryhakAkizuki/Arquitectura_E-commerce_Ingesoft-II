@@ -14,8 +14,8 @@ Tienda online con autenticación por roles (usuario/administrador), gestión CRU
 |---|---------------|--------------------|-----------|--------|
 | R1 | Autenticación y gestión de usuarios segura | `backend: auth` (JWT + BCrypt) | Endpoints `/api/auth/*`, `/api/users/me` | Implementado |
 | R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` con `@PreAuthorize("hasRole('ADMIN')")`; `orders` pendiente | Endpoints `/api/admin/products/**` (CRUD + stock) | Parcial (órdenes pendiente) |
-| R3 | Carrito y checkout fluidos | `backend: cart` + `checkout`; `frontend: cart` | Flujo documentado | Pendiente |
-| R4 | Validaciones de stock y pagos | `CartService` y `CheckoutService` transaccional | Pruebas unitarias | Pendiente |
+| R3 | Carrito y checkout fluidos | `backend: cart` (carrito persistente con validación de stock) + `checkout` pendiente; `frontend: cart` pendiente | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}` | Parcial (carrito implementado; checkout pendiente) |
+| R4 | Validaciones de stock y pagos | `CartServiceImpl` valida stock en agregar/actualizar (`INSUFFICIENT_STOCK`); pago pendiente en `CheckoutService` transaccional | Endpoints de carrito + código `INSUFFICIENT_STOCK` | Parcial (stock en carrito implementado; pago pendiente) |
 | R5 | Interfaz clara de productos y detalles | `backend: catalog` (catálogo público); `frontend: catalog` pendiente | Endpoints `GET /api/products`, `GET /api/products/{id}` | Parcial (frontend pendiente) |
 
 ### 1.2 Criterios de evaluación → estrategia
@@ -160,6 +160,7 @@ El esquema implementado en [`V1__init.sql`](../backend/src/main/resources/db/mig
 | `PAYMENTS` con `transaction_id` y `failure_reason` | Trazabilidad: se puede demostrar el flujo de pago rechazado con evidencia | ADR-007 |
 | Enums de dominio como `VARCHAR` + `CHECK` | Portabilidad PostgreSQL/H2 (H2 no soporta `CREATE TYPE ... AS ENUM`) | ADR-004 |
 | Índices en `orders.user_id`, `orders.status`, `products.available`, `cart_items.cart_id` | Consultas frecuentes (mis órdenes, listado admin, catálogo activo, carga de carrito) | ADR-002 |
+| `CART_ITEMS` con restricción única `cart_id + product_id` | Un producto aparece una sola vez por carrito: re-agregarlo **acumula** la cantidad en lugar de duplicar el ítem (ADR-014) | ADR-014 |
 
 **Migraciones con Flyway** (`V1__init.sql`, `V2__seed.sql`): esquema versionado, reproducible y dueño único del esquema (`ddl-auto: validate`). Seed determinístico: 1 admin, 1 usuario y 8 productos (uno con stock bajo para demostrar `INSUFFICIENT_STOCK`).
 
@@ -199,6 +200,7 @@ Base URL: `http://localhost:8080/api`. La referencia completa por endpoint con e
 | Users | `GET /users/me`, `PUT /users/me` | Usuario |
 | Products | `GET /products`, `GET /products/{id}` | Público |
 | Products (admin) | `GET/POST /admin/products`, `PUT/DELETE /admin/products/{id}`, `PATCH /admin/products/{id}/stock` | Admin |
+| Cart | `GET /cart`, `POST /cart/items`, `PATCH /cart/items/{itemId}`, `DELETE /cart/items/{itemId}` | Usuario |
 | Docs | `/swagger-ui.html` | Público |
 
 **Formato de error estándar** (todo el backend responde igual):
@@ -218,13 +220,13 @@ Códigos de negocio: `EMAIL_ALREADY_REGISTERED`, `INVALID_CREDENTIALS`, `PRODUCT
 
 | Principio | Ejemplo en el proyecto | Elemento |
 |-----------|------------------------|----------|
-| **S**ingle Responsibility | `AuthController` solo traduce HTTP → DTO; `AuthServiceImpl` concentra las reglas de negocio; `JwtTokenProvider` solo emite/valida tokens;| `AuthController`, `AuthServiceImpl`, `JwtTokenProvider` |
+| **S**ingle Responsibility | `AuthController` solo traduce HTTP → DTO; `AuthServiceImpl` concentra las reglas de negocio; `JwtTokenProvider` solo emite/valida tokens; `CartServiceImpl` concentra las reglas del carrito (stock, acumulación, subtotal); | `AuthController`, `AuthServiceImpl`, `JwtTokenProvider`, `CartServiceImpl` |
 | **O**pen/Closed | `ErrorCode` crece por adición sin tocar el handler;| `ErrorCode`;|
 | **L**iskov Substitution | `UserRepository` (Spring Data) es mockeable y `AuthServiceImpl` cumple el contrato completo;| `UserRepository`, `AuthServiceImpl`;|
-| **I**nterface Segregation | `IAuthService` (4 métodos de auth/perfil) y `UserRepository` (2 consultas) son interfaces pequeñas y específicas;| `IAuthService`, `UserRepository`;|
+| **I**nterface Segregation | `IAuthService` (4 métodos de auth/perfil), `ICartService` (4 métodos de carrito) y `UserRepository` (2 consultas) son interfaces pequeñas y específicas;| `IAuthService`, `ICartService`, `UserRepository` |
 | **D**ependency Inversion | Inyección por constructor en `AuthController` → `IAuthService` → `UserRepository`/`PasswordEncoder` (interfaz); `SecurityConfig` inyecta `JwtAuthFilter`| Todo el backend |
 
-> Evidencias con fragmentos de código real: [`solid-dry.md`](solid-dry.md) — cubre los módulos implementados (Auth, Users, Seguridad y manejo de errores);
+> Evidencias con fragmentos de código real: [`solid-dry.md`](solid-dry.md) — cubre los módulos implementados (Auth, Users, Catálogo, Carrito, Seguridad y manejo de errores);
 
 ## 8. Manejo de errores y calidad
 
@@ -239,7 +241,7 @@ Códigos de negocio: `EMAIL_ALREADY_REGISTERED`, `INVALID_CREDENTIALS`, `PRODUCT
 
 | Capa | Herramienta | Casos prioritarios |
 |------|-------------|--------------------|
-| Servicios backend | JUnit 5 + Mockito | `CheckoutService`: stock insuficiente, pago rechazado (se conserva `PENDING`), éxito (stock descontado y carrito vacío); `PaymentService`: mapeo de estados; `ProductService`: validaciones de creación/actualización; `AuthService`: hash de contraseña y emisión de token |
+| Servicios backend | JUnit 5 + Mockito | `CartService`: stock insuficiente al agregar/actualizar (`INSUFFICIENT_STOCK`), acumulación de cantidad, subtotal correcto, ítem ajeno al carrito → 404; `CheckoutService`: stock insuficiente, pago rechazado (se conserva `PENDING`), éxito (stock descontado y carrito vacío); `PaymentService`: mapeo de estados; `ProductService`: validaciones de creación/actualización; `AuthService`: hash de contraseña y emisión de token |
 | API backend | Spring Boot Test + MockMvc | Contrato de `/auth/register`, `/checkout` (409/402/201), permisos admin (403 a usuario común) |
 | Componentes frontend | Vitest + React Testing Library | `ProductCard` (agregar al carrito), ítem de carrito (cambiar cantidad), `CheckoutPage` (formulario inválido, resultado de error) |
 

@@ -1,11 +1,11 @@
 # Evidencias SOLID y DRY
 
 Este documento mapea cada principio a **fragmentos de código real ya implementado**
-en el módulo de autenticación/usuarios (R1), en el catálogo de productos (R2/R5)
-y en la infraestructura de seguridad y errores. Cada principio indica
-**dónde** se aplica, **por qué** y **qué gana** el proyecto. Los elementos de
-los módulos aún en desarrollo (Carrito, Checkout, Órdenes) se citan como
-*pendientes* y se evidenciarán aquí cuando se implementen.
+en el módulo de autenticación/usuarios (R1), en el catálogo de productos (R2/R5),
+en el carrito de compras (R3/R4) y en la infraestructura de seguridad y errores.
+Cada principio indica **dónde** se aplica, **por qué** y **qué gana** el
+proyecto. Los elementos de los módulos aún en desarrollo (Checkout, Órdenes)
+se citan como *pendientes* y se evidenciarán aquí cuando se implementen.
 
 > Convención de enlaces: los archivos se enlazan con su ruta relativa al
 > monorepo. Los fragmentos son extractos literales de la fuente (se recortan
@@ -122,6 +122,27 @@ public class AdminProductController {
 La regla de negocio de escritura (validaciones, desactivación, ajuste de
 stock) vive en `ProductAdminServiceImpl`; la de lectura en
 `ProductServiceImpl`. Los controladores no deciden, solo traducen.
+
+### 6. El carrito separa traducción HTTP de las reglas de stock
+
+[`CartController.java`](../backend/src/main/java/com/ingesoft/shop/controller/CartController.java)
+solo resuelve **quién** opera (el email del token, vía `Authentication`) y
+traduce HTTP → DTO; [`CartServiceImpl.java`](../backend/src/main/java/com/ingesoft/shop/service/impl/CartServiceImpl.java)
+concentra **toda** la regla del carrito: "un solo ítem por producto", "la
+cantidad se acumula", "no puede reservarse más stock del disponible", "el
+subtotal se calcula, no se guarda".
+
+```java
+@PostMapping("/items")
+public CartResponse add(Authentication authentication,
+        @Valid @RequestBody AddCartItemRequest request) {
+    return cartService.add(authentication.getName(), request);
+}
+```
+
+Si mañana cambia el verbo HTTP, el formato del JSON o la estrategia de
+precios del carrito, cada cambio toca **una** capa: la presentacional o el
+servicio, nunca las dos.
 
 ---
 
@@ -255,6 +276,13 @@ interfaces **separadas**. `ProductController` depende solo de la primera y
 `AdminProductController` solo de la segunda: ni un controlador ni un servicio
 del catálogo público conocen operaciones de administración.
 
+**Ya implementado:** [`ICartService`](../backend/src/main/java/com/ingesoft/shop/service/ICartService.java)
+expone exactamente los **4** métodos del módulo de carrito (`get`, `add`,
+`updateQuantity`, `remove`). `CartController` no conoce repositorios,
+entidades ni la regla de stock: depende solo de esta interfaz pequeña, y el
+futuro módulo de Checkout no la contaminará con sus propios métodos (tendrá
+su propio `ICheckoutService`).
+
 ### 2. `UserRepository` solo expone las consultas del dominio
 
 [`UserRepository.java`](../backend/src/main/java/com/ingesoft/shop/repository/UserRepository.java)
@@ -330,6 +358,21 @@ public ProductController(IProductService productService) {
 
 public AdminProductController(IProductAdminService productAdminService) {
     this.productAdminService = productAdminService;
+}
+```
+
+### 5. El controlador del carrito depende de `ICartService`, no de la implementación
+
+[`CartController.java`](../backend/src/main/java/com/ingesoft/shop/controller/CartController.java)
+recibe `ICartService` por constructor. `CartServiceImpl` a su vez depende de
+las cuatro interfaces de repositorio (`UserRepository`,
+`ProductRepository`, `CartRepository`, `CartItemRepository`), nunca de
+implementaciones concretas: en tests se maquetan los repositorios sin tocar
+el servicio.
+
+```java
+public CartController(ICartService cartService) {
+    this.cartService = cartService;
 }
 ```
 
@@ -448,15 +491,37 @@ es el **único** DTO para creación (`POST`) y actualización (`PUT`): las
 restricciones de Bean Validation se declaran **una vez** y se comparten entre
 ambas operaciones.
 
+### 8. El mapeo del carrito entidad → respuesta se define una sola vez
+
+[`CartResponse.from(Cart)`](../backend/src/main/java/com/ingesoft/shop/dto/response/CartResponse.java)
+y [`CartItemResponse.from(CartItem)`](../backend/src/main/java/com/ingesoft/shop/dto/response/CartItemResponse.java)
+son los **únicos** puntos que convierten el modelo de dominio en el contrato
+de salida: los 4 endpoints de carrito (`get`, `add`, `updateQuantity`,
+`remove`) devuelven siempre un `CartResponse` construido por `from`. El
+**subtotal** tampoco se calcula a mano en cada endpoint: lo deriva
+`Cart.getSubtotal()` a partir de `CartItem.lineTotal()`, que multiplica
+`unitPrice × quantity` en un único sitio.
+
+```java
+public static CartResponse from(Cart cart) {
+    return new CartResponse(cart.getId(),
+            cart.getItems().stream().map(CartItemResponse::from).toList(),
+            cart.getSubtotal());
+}
+```
+
+Si cambia el contrato de salida del carrito, se editan dos métodos, no cuatro
+endpoints.
+
 ---
 
 ## Matriz resumen
 
-| Principio | Auth (R1) | Catálogo (R2/R5) | Pendiente |
-|-----------|-----------|------------------|-----------|
-| S | ✔ controlador/servicio/JWT/errores | ✔ controladores por rol, servicios de lectura/escritura | Carrito, Checkout, Órdenes |
-| O | ✔ métodos nuevos en `IAuthService`, `ErrorCode` | ✔ flag `onlyAvailable` en `findCatalogPage` | Gateway `IPaymentProvider` |
-| L | ✔ repositorios, `PasswordEncoder` | ✔ `ProductRepository` sustituible | — |
-| I | ✔ `IAuthService` | ✔ `IProductService` / `IProductAdminService` | — |
-| D | ✔ inyección por constructor | ✔ inyección por constructor | — |
-| DRY | ✔ `UserResponse.from`, `ErrorCode`, `ApiError` | ✔ `ProductResponse.from`, `ProductRequest` | — |
+| Principio | Auth (R1) | Catálogo (R2/R5) | Carrito (R3/R4) | Pendiente |
+|-----------|-----------|------------------|------------------|-----------|
+| S | ✔ controlador/servicio/JWT/errores | ✔ controladores por rol, servicios de lectura/escritura | ✔ controlador traduce, servicio concentra reglas de stock | Checkout, Órdenes |
+| O | ✔ métodos nuevos en `IAuthService`, `ErrorCode` | ✔ flag `onlyAvailable` en `findCatalogPage` | ✔ `INSUFFICIENT_STOCK`/`NOT_FOUND` reutilizados sin tocar el handler | Gateway `IPaymentProvider` |
+| L | ✔ repositorios, `PasswordEncoder` | ✔ `ProductRepository` sustituible | ✔ `CartRepository`/`CartItemRepository` mockeables | — |
+| I | ✔ `IAuthService` | ✔ `IProductService` / `IProductAdminService` | ✔ `ICartService` (4 métodos) | — |
+| D | ✔ inyección por constructor | ✔ inyección por constructor | ✔ inyección por constructor | — |
+| DRY | ✔ `UserResponse.from`, `ErrorCode`, `ApiError` | ✔ `ProductResponse.from`, `ProductRequest` | ✔ `CartResponse.from`, `Cart.getSubtotal()` | — |
