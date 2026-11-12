@@ -163,32 +163,6 @@ El esquema implementado en [`V1__init.sql`](../backend/src/main/resources/db/mig
 
 **Migraciones con Flyway** (`V1__init.sql`, `V2__seed.sql`): esquema versionado, reproducible y dueño único del esquema (`ddl-auto: validate`). Seed determinístico: 1 admin, 1 usuario y 8 productos (uno con stock bajo para demostrar `INSUFFICIENT_STOCK`).
 
-### 4.1 Estados
-
-> Estados definidos en el esquema (`V1__init.sql`) y en los enums `OrderStatus`/`PaymentStatus` (implementado); las transiciones se implementan en los módulos Checkout y Órdenes (pendientes).
-
-**Ciclo de vida de la orden:**
-
-```mermaid
-stateDiagram-v2
-    [*] --> PENDING : checkout con pago rechazado
-    [*] --> PAID : pago exitoso
-    PAID --> SHIPPED : admin envia
-    SHIPPED --> DELIVERED : admin confirma entrega
-    PAID --> CANCELLED : admin cancela y restaura stock
-    PENDING --> PAID : reintento de pago
-    PENDING --> CANCELLED : admin cancela
-```
-
-**Ciclo de vida del pago:**
-
-```mermaid
-stateDiagram-v2
-    [*] --> PENDING
-    PENDING --> CONFIRMED : provider acepta
-    PENDING --> FAILED : provider rechaza
-```
-
 ## 5. Seguridad (R1)
 
 - **JWT** HS256 con expiración de 2 h (configurable en `application.yml`). El token se emite en `/api/auth/login` y se envía en header `Authorization: Bearer <token>`.
