@@ -37,7 +37,8 @@ public class ProductServiceImpl implements IProductService {
     @Override
     @Transactional(readOnly = true)
     public Page<ProductResponse> list(int page, int size, String search, String sort) {
-        String normalizedSearch = (search == null || search.isBlank()) ? null : search.trim();
+
+        String normalizedSearch = (search == null || search.isBlank()) ? "" : search.trim();
         Pageable pageable = toPageable(page, size, sort);
         return productRepository.findCatalogPage(normalizedSearch, true, pageable)
                 .map(ProductResponse::from);

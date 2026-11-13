@@ -39,7 +39,8 @@ public class ProductAdminServiceImpl implements IProductAdminService {
     @Override
     @Transactional(readOnly = true)
     public Page<ProductResponse> listAll(int page, int size, String search, String sort) {
-        String normalizedSearch = (search == null || search.isBlank()) ? null : search.trim();
+
+        String normalizedSearch = (search == null || search.isBlank()) ? "" : search.trim();
         Pageable pageable = toPageable(page, size, sort);
         return productRepository.findCatalogPage(normalizedSearch, false, pageable)
                 .map(ProductResponse::from);
