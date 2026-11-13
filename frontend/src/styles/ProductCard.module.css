@@ -1,0 +1,155 @@
+.card {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background-color: var(--color-surface);
+  border: 1px solid rgba(31, 41, 51, 0.08);
+  border-radius: var(--radius);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06);
+  transition:
+    transform 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+.card:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+.media {
+  position: relative;
+  display: block;
+  aspect-ratio: 4 / 3;
+  background-color: #e8edf2;
+  overflow: hidden;
+}
+
+.image {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.imagePlaceholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 3rem;
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 0.5rem;
+  padding: 0.9rem 1rem 1rem;
+}
+
+.name {
+  margin: 0;
+  font-size: 1.05rem;
+  line-height: 1.3;
+}
+
+.name a {
+  color: var(--color-text);
+  text-decoration: none;
+}
+
+.name a:hover {
+  color: var(--color-primary);
+}
+
+.description {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  min-height: 2.6em;
+}
+
+.meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: auto;
+}
+
+.price {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-text);
+}
+
+.stock {
+  display: inline-block;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.15rem 0.55rem;
+  border-radius: 999px;
+  background-color: rgba(31, 41, 51, 0.08);
+  color: var(--color-text-muted);
+  white-space: nowrap;
+}
+
+.stockLow {
+  background-color: #fef3c7;
+  color: #92400e;
+}
+
+.stockOut {
+  background-color: #fee2e2;
+  color: var(--color-danger);
+}
+
+.footer {
+  margin-top: 0.5rem;
+}
+
+.addButton {
+  width: 100%;
+  padding: 0.55rem;
+  background-color: var(--color-primary);
+  color: #ffffff;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 0.95rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+.addButton:hover:not(:disabled) {
+  background-color: #1d4ed8;
+}
+
+.addButton:disabled {
+  background-color: rgba(31, 41, 51, 0.25);
+  cursor: not-allowed;
+}
+
+.loginLink {
+  display: block;
+  width: 100%;
+  text-align: center;
+  padding: 0.55rem;
+  background-color: rgba(37, 99, 235, 0.08);
+  border: 1px dashed rgba(37, 99, 235, 0.4);
+  border-radius: var(--radius);
+  color: var(--color-primary);
+  font-size: 0.95rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition: background-color 0.15s ease;
+}
+
+.loginLink:hover {
+  background-color: rgba(37, 99, 235, 0.15);
+}

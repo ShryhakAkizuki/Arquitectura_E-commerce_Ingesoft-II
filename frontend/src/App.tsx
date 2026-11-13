@@ -1,9 +1,13 @@
 import type { FC } from 'react';
 import { Route, Routes } from 'react-router-dom';
 
+import { AdminRoute } from './components/AdminRoute';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { AdminProductsPage } from './pages/admin/AdminProductsPage';
+import { CatalogPage } from './pages/CatalogPage';
 import { LoginPage } from './pages/LoginPage';
+import { ProductDetailPage } from './pages/ProductDetailPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { RegisterPage } from './pages/RegisterPage';
 
@@ -22,21 +26,8 @@ const PlaceholderPage: FC<PlaceholderPageProps> = ({ title, description }) => (
 const App: FC = () => (
   <Routes>
     <Route element={<Layout />}>
-      <Route
-        path="/"
-        element={
-          <PlaceholderPage
-            title="Catálogo"
-            description="Grid de productos con paginación y búsqueda."
-          />
-        }
-      />
-      <Route
-        path="/product/:id"
-        element={
-          <PlaceholderPage title="Detalle de producto" description="Detalle y agregar al carrito." />
-        }
-      />
+      <Route path="/" element={<CatalogPage />} />
+      <Route path="/product/:id" element={<ProductDetailPage />} />
       <Route
         path="/cart"
         element={<PlaceholderPage title="Carrito" description="Edición de cantidades y totales." />}
@@ -70,7 +61,9 @@ const App: FC = () => (
       <Route
         path="/admin/products"
         element={
-          <PlaceholderPage title="Panel admin · Productos" description="CRUD y stock para administradores." />
+          <AdminRoute>
+            <AdminProductsPage />
+          </AdminRoute>
         }
       />
       <Route

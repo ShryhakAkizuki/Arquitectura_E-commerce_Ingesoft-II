@@ -13,10 +13,10 @@ Tienda online con autenticación por roles (usuario/administrador), gestión CRU
 | # | Requerimiento | Módulo responsable | Evidencia | Estado |
 |---|---------------|--------------------|-----------|--------|
 | R1 | Autenticación y gestión de usuarios segura | `backend: auth` (JWT + BCrypt); `frontend: pages` (login, registro y perfil) | Endpoints `/api/auth/*`, `/api/users/me`; páginas [`LoginPage.tsx`](../frontend/src/pages/LoginPage.tsx), [`RegisterPage.tsx`](../frontend/src/pages/RegisterPage.tsx), [`ProfilePage.tsx`](../frontend/src/pages/ProfilePage.tsx) | Implementado |
-| R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` con `@PreAuthorize("hasRole('ADMIN')")`; `backend: orders` (gestión admin de órdenes con máquina de estados y restitución de stock) | Endpoints `/api/admin/products/**` (CRUD + stock), `GET /api/admin/orders`, `GET /api/admin/orders/{id}`, `PATCH /api/admin/orders/{id}/status` | Implementado |
+| R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` con `@PreAuthorize("hasRole('ADMIN')")`; `backend: orders` (gestión admin de órdenes con máquina de estados y restitución de stock); `frontend: pages/admin` (panel de productos) | Endpoints `/api/admin/products/**` (CRUD + stock), `GET /api/admin/orders`, `GET /api/admin/orders/{id}`, `PATCH /api/admin/orders/{id}/status`; panel [`AdminProductsPage.tsx`](../frontend/src/pages/admin/AdminProductsPage.tsx) (CRUD, stock y desactivación) | Implementado |
 | R3 | Carrito y checkout fluidos | `backend: cart` (carrito persistente con validación de stock) + `backend: checkout` (`POST /api/checkout` transaccional con pago simulado); `frontend: api` (capa de datos `api/cart.ts`, `api/checkout.ts` + sesión); páginas de UI en desarrollo | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`, `POST /api/checkout` | Parcial (backend completo; frontend con capa de datos y sesión lista, UI en desarrollo) |
 | R4 | Validaciones de stock y pagos | `CartServiceImpl` valida stock en agregar/actualizar; `CheckoutServiceImpl` re-valida stock bajo bloqueo pesimista (`INSUFFICIENT_STOCK`, `CART_EMPTY`) y procesa el pago simulado (`PAYMENT_DECLINED` → orden `PENDING`) | Endpoints de carrito y de checkout + códigos `INSUFFICIENT_STOCK`, `CART_EMPTY`, `PAYMENT_DECLINED` | Implementado (backend) |
-| R5 | Interfaz clara de productos y detalles | `backend: catalog` (catálogo público); `frontend: api` (capa de datos `api/products.ts`, tipos `types/product.ts` y rutas públicas); páginas de UI en desarrollo | Endpoints `GET /api/products`, `GET /api/products/{id}` | Parcial (frontend con capa de datos lista, UI en desarrollo) |
+| R5 | Interfaz clara de productos y detalles | `backend: catalog` (catálogo público); `frontend: pages` (catálogo y detalle) con componentes compartidos de la UI ([`CatalogPage.tsx`](../frontend/src/pages/CatalogPage.tsx), [`ProductDetailPage.tsx`](../frontend/src/pages/ProductDetailPage.tsx)) | Endpoints `GET /api/products`, `GET /api/products/{id}`; rutas `/` y `/product/:id` | Implementado |
 
 ### 1.2 Criterios de evaluación → estrategia
 
@@ -35,7 +35,7 @@ flowchart TB
     end
 
     subgraph FrontendReactTS
-        P["Paginas: Login, Registro, Perfil (resto en desarrollo)"]
+        P["Paginas: Login, Registro, Perfil, Catálogo, Detalle, Panel admin de productos"]
         G["Guardas de ruta: ProtectedRoute, AdminRoute"]
         C["AuthContext: sesion global JWT + perfil"]
         A["Capa api Axios: cliente + modulos por dominio"]
@@ -122,10 +122,11 @@ Página / Componente → api/* (funciones por dominio) → client.ts (Axios) →
 
 > **Estado actual del frontend:** implementados la infraestructura (Vite/TS/ESLint), la capa
 > de datos completa para todos los dominios de la API, la sesión global, las guardas de ruta,
-> el mapa de rutas ([`App.tsx`](../frontend/src/App.tsx)) y las páginas de autenticación
-> (login, registro y perfil, §3.3); las páginas restantes (catálogo, detalle, carrito,
-> checkout, órdenes y panel admin) están en desarrollo con placeholders que describen su
-> comportamiento objetivo.
+> el mapa de rutas ([`App.tsx`](../frontend/src/App.tsx)), las páginas de autenticación
+> (login, registro y perfil, §3.3) y las páginas de catálogo, detalle de producto y panel
+> admin de productos (§3.4); las páginas restantes (carrito, checkout, órdenes y panel
+> admin de órdenes) están en desarrollo con placeholders que describen su comportamiento
+> objetivo.
 
 ### 3.3 Páginas de autenticación implementadas
 
@@ -153,6 +154,47 @@ Convenciones comunes a las tres páginas:
   [`RegisterPage.module.css`](../frontend/src/styles/RegisterPage.module.css) y
   [`ProfilePage.module.css`](../frontend/src/styles/ProfilePage.module.css)
   (CSS Modules, sin estilos globales por página).
+
+### 3.4 Catálogo, detalle de producto y panel admin de productos
+
+Las páginas nuevas (`/`, `/product/:id` y `/admin/products` en
+[`App.tsx`](../frontend/src/App.tsx)) siguen la misma regla de dependencias que
+el resto de la SPA: consumen `api/*`, [`useAuth`](../frontend/src/hooks/useAuth.ts)
+y los tipos espejo; ningún componente habla con Axios directamente.
+
+| Página | Ruta | Comportamiento |
+|--------|------|----------------|
+| [`CatalogPage`](../frontend/src/pages/CatalogPage.tsx) | `/` | Catálogo público paginado (`GET /api/products`, 10 por página) con búsqueda con debounce (400 ms); estados de carga, de error con botón «Reintentar» y vacío con «Limpiar búsqueda» cuando hay un filtro activo |
+| [`ProductDetailPage`](../frontend/src/pages/ProductDetailPage.tsx) | `/product/:id` | Detalle del producto (`GET /api/products/{id}`): imagen con fallback, precio en COP y `updatedAt` en formato es-CO; la cantidad queda acotada al stock disponible; 404 → «Producto no encontrado»; «Agregar al carrito» queda deshabilitado pendiente de la UI del carrito (paso F-3.3) |
+| [`AdminProductsPage`](../frontend/src/pages/admin/AdminProductsPage.tsx) | `/admin/products` (tras [`AdminRoute`](../frontend/src/components/AdminRoute.tsx)) | Gestión de productos: tabla paginada que incluye desactivados, búsqueda, creación y edición vía [`ProductForm`](../frontend/src/components/admin/ProductForm.tsx), ajuste absoluto de stock en línea (entero ≥ 0, `PATCH .../stock`), desactivación con confirmación (soft delete) y mensaje de éxito que se oculta solo a los 4 s |
+
+Componentes compartidos:
+
+| Componente | Uso |
+|------------|-----|
+| [`ProductCard`](../frontend/src/components/ProductCard.tsx) | Tarjeta de la grilla del catálogo: precio en COP con `Intl.NumberFormat` (es-CO), insignia de stock («Agotado», «Quedan N» cuando quedan ≤ 3, o «En stock»), imagen con `loading="lazy"` y fallback de error, y CTA que exige sesión |
+| [`Pagination`](../frontend/src/components/Pagination.tsx) | Navegación de páginas con ventana con elipsis y `aria-current`; se oculta cuando el resultado ocupa una sola página |
+| [`EmptyState`](../frontend/src/components/EmptyState.tsx) | Estado vacío/error genérico (`role="status"`) con ranura para acciones |
+
+Convenciones comunes a las tres páginas:
+
+- **Guarda de carreras:** `requestIdRef` descarta las respuestas que llegan
+  desordenadas (p. ej. un cambio de búsqueda con una petición anterior aún
+  en curso).
+- **Debounce de búsqueda:** 400 ms entre la última tecla y la petición.
+- **Validación en cliente espejo del backend:** [`ProductForm`](../frontend/src/components/admin/ProductForm.tsx)
+  refleja `ProductRequest` (nombre ≤ 150, descripción ≤ 2000, URL de imagen
+  ≤ 500) y el stock valida entero ≥ 0; el backend sigue siendo la autoridad.
+- **Errores del backend tal cual:** `ApiError.message` se muestra en un
+  `<p role="alert">`; solo los errores no tipados muestran un mensaje genérico.
+- **Estilos por módulo:** 7 CSS Modules nuevos
+  ([`CatalogPage.module.css`](../frontend/src/styles/CatalogPage.module.css),
+  [`ProductDetailPage.module.css`](../frontend/src/styles/ProductDetailPage.module.css),
+  [`AdminProductsPage.module.css`](../frontend/src/styles/AdminProductsPage.module.css),
+  [`ProductCard.module.css`](../frontend/src/styles/ProductCard.module.css),
+  [`Pagination.module.css`](../frontend/src/styles/Pagination.module.css),
+  [`EmptyState.module.css`](../frontend/src/styles/EmptyState.module.css) y
+  [`ProductForm.module.css`](../frontend/src/styles/ProductForm.module.css)).
 
 ## 4. Diseño de base de datos
 
