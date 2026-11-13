@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+<!DOCTYPE module PUBLIC
+    "-//Checkstyle//DTD Checkstyle Configuration 1.3//EN"
+    "https://checkstyle.org/dtds/configuration_1_3.dtd">
+<!-- reglas de estilo del backend. -->
+
+<!-- Nivel de severidad: warning -->
+<module name="Checker">
+  <property name="charset" value="UTF-8"/>
+  <property name="severity" value="warning"/>
+  <property name="fileExtensions" value="java"/>
+
+  <!-- Reglas de archivo -->
+  <module name="FileTabCharacter">
+    <property name="eachLine" value="true"/>
+  </module>
+  <module name="NewlineAtEndOfFile">
+    <property name="lineSeparator" value="lf_cr_crlf"/>
+  </module>
+  <module name="LineLength">
+    <property name="max" value="120"/>
+    <property name="ignorePattern" value="^package.*|^import.*|a href|href|http://|https://"/>
+  </module>
+
+  <!-- Reglas de codigo -->
+  <module name="TreeWalker">
+    <module name="OuterTypeFilename"/>
+    <module name="OneTopLevelClass"/>
+    <module name="NoLineWrap"/>
+    <module name="LeftCurly"/>
+    <module name="RightCurly"/>
+    <module name="NeedBraces"/>
+    <module name="EmptyBlock">
+      <property name="option" value="TEXT"/>
+      <property name="tokens" value="LITERAL_TRY, LITERAL_FINALLY, LITERAL_IF, LITERAL_ELSE, LITERAL_SWITCH"/>
+    </module>
+    <module name="OneStatementPerLine"/>
+    <module name="MultipleVariableDeclarations"/>
+    <module name="ArrayTypeStyle"/>
+    <module name="SeparatorWrap">
+      <property name="tokens" value="COMMA"/>
+      <property name="option" value="EOL"/>
+    </module>
+    <module name="Indentation">
+      <property name="basicOffset" value="4"/>
+      <property name="caseIndent" value="4"/>
+      <property name="throwsIndent" value="4"/>
+      <property name="lineWrappingIndentation" value="8"/>
+    </module>
+
+    <!-- Nombres -->
+    <module name="PackageName">
+      <property name="format" value="^[a-z]+(\.[a-z][a-z0-9]*)*$"/>
+    </module>
+    <module name="TypeName"/>
+    <module name="MemberName">
+      <property name="format" value="^[a-z][a-zA-Z0-9]*$"/>
+    </module>
+    <module name="MethodName">
+      <property name="format" value="^[a-z][a-zA-Z0-9]*$"/>
+    </module>
+    <module name="ParameterName">
+      <property name="format" value="^[a-z][a-zA-Z0-9]*$"/>
+    </module>
+    <module name="LocalVariableName">
+      <property name="format" value="^[a-z][a-zA-Z0-9]*$"/>
+    </module>
+    <module name="ConstantName">
+      <property name="format" value="^[A-Z][A-Z0-9]*(_[A-Z0-9]+)*$"/>
+    </module>
+
+    <!-- Imports -->
+    <module name="UnusedImports"/>
+    <module name="RedundantImport"/>
+    <module name="AvoidStarImport"/>
+
+    <!-- Correctitud -->
+    <module name="UpperEll"/>
+    <module name="StringLiteralEquality"/>
+    <module name="EqualsHashCode"/>
+    <module name="MissingSwitchDefault"/>
+    <module name="FallThrough"/>
+    <module name="SimplifyBooleanExpression"/>
+    <module name="SimplifyBooleanReturn"/>
+  </module>
+</module>
