@@ -216,3 +216,20 @@
 .errorState button:hover {
   filter: brightness(1.08);
 }
+
+.addButton.added {
+  background-color: #16a34a;
+}
+
+.addButton.added:hover:not(:disabled) {
+  background-color: #15803d;
+}
+
+
+.addError {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--color-danger);
+}

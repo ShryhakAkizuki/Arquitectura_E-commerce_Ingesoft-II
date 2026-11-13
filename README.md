@@ -23,7 +23,7 @@ implementa.
 | **Carrito** (ver, agregar, cambiar cantidad, eliminar ítem) | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`; validación de stock `INSUFFICIENT_STOCK` |
 | **Checkout** (crear orden con pago simulado) | Endpoint `POST /api/checkout`; transaccional con bloqueos pesimistas (`SELECT ... FOR UPDATE`) contra sobreventa; pago simulado con tarjeta de rechazo configurable; la orden queda `PENDING` si el pago se rechaza |
 | **Órdenes** (consultar las propias y gestión admin) | Endpoints `GET /api/orders/mine`, `GET /api/orders/mine/{id}` (usuario) y `GET /api/admin/orders`, `GET /api/admin/orders/{id}`, `PATCH /api/admin/orders/{id}/status` (admin); máquina de estados `PENDING → PAID → SHIPPED → DELIVERED` (+ `CANCELLED`); restitución de stock al cancelar una orden `PAID` |
-| **Frontend** (React 18 + TypeScript + Vite, SPA) | Sesión global con JWT + perfil ([`AuthContext.tsx`](frontend/src/context/AuthContext.tsx)), capa de datos Axios espejo del contrato del backend ([`api/`](frontend/src/api)), rutas protegidas ([`ProtectedRoute.tsx`](frontend/src/components/ProtectedRoute.tsx), [`AdminRoute.tsx`](frontend/src/components/AdminRoute.tsx)) y navegación por sesión con insignia de carrito ([`Navbar.tsx`](frontend/src/components/Navbar.tsx)); páginas implementadas: [`LoginPage.tsx`](frontend/src/pages/LoginPage.tsx) (login con redirección por rol), [`RegisterPage.tsx`](frontend/src/pages/RegisterPage.tsx) (registro con confirmación de contraseña), [`ProfilePage.tsx`](frontend/src/pages/ProfilePage.tsx) (edición de perfil con reautenticación al cambiar el email), [`CatalogPage.tsx`](frontend/src/pages/CatalogPage.tsx) (catálogo público paginado con búsqueda), [`ProductDetailPage.tsx`](frontend/src/pages/ProductDetailPage.tsx) (detalle con cantidad limitada al stock) y [`AdminProductsPage.tsx`](frontend/src/pages/admin/AdminProductsPage.tsx) (panel admin: CRUD de productos, ajuste de stock y desactivación); el resto de la UI en placeholders |
+| **Frontend** (React 18 + TypeScript + Vite, SPA) | Sesión global con JWT + perfil ([`AuthContext.tsx`](frontend/src/context/AuthContext.tsx)), estado global del carrito con el backend como fuente de verdad ([`CartContext.tsx`](frontend/src/context/CartContext.tsx), acceso vía [`useCart.ts`](frontend/src/hooks/useCart.ts)), capa de datos Axios espejo del contrato del backend ([`api/`](frontend/src/api)), rutas protegidas ([`ProtectedRoute.tsx`](frontend/src/components/ProtectedRoute.tsx), [`AdminRoute.tsx`](frontend/src/components/AdminRoute.tsx)) y navegación por sesión con insignia de carrito ([`Navbar.tsx`](frontend/src/components/Navbar.tsx)); páginas implementadas: [`LoginPage.tsx`](frontend/src/pages/LoginPage.tsx) (login con redirección por rol), [`RegisterPage.tsx`](frontend/src/pages/RegisterPage.tsx) (registro con confirmación de contraseña), [`ProfilePage.tsx`](frontend/src/pages/ProfilePage.tsx) (edición de perfil con reautenticación al cambiar el email), [`CatalogPage.tsx`](frontend/src/pages/CatalogPage.tsx) (catálogo público paginado con búsqueda), [`ProductDetailPage.tsx`](frontend/src/pages/ProductDetailPage.tsx) (detalle con cantidad limitada al stock y «Agregar al carrito»), [`CartPage.tsx`](frontend/src/pages/CartPage.tsx) (carrito: edición de cantidades con [`QuantitySelector.tsx`](frontend/src/components/QuantitySelector.tsx), eliminación de ítems y subtotal provisto por el backend; «Ir a checkout» aún placeholder) y [`AdminProductsPage.tsx`](frontend/src/pages/admin/AdminProductsPage.tsx) (panel admin: CRUD de productos, ajuste de stock y desactivación); el resto de la UI en placeholders |
 | **Seguridad** (Spring Security, roles, filtros JWT, errores 401/403) | Política de rutas por rol en [`SecurityConfig.java`](backend/src/main/java/com/ingesoft/shop/config/SecurityConfig.java) |
 | **Excepciones globales** (contrato de error `ApiError` + `ErrorCode`) | [`GlobalExceptionHandler.java`](backend/src/main/java/com/ingesoft/shop/exception/GlobalExceptionHandler.java) |
 | **Documentación** (arquitectura, API) | Carpeta [`docs/`](docs) |
@@ -122,14 +122,18 @@ Arquitectura_E-commerce_Ingesoft-II/
 │       │   ├── Navbar.tsx
 │       │   ├── Pagination.tsx
 │       │   ├── ProductCard.tsx
-│       │   └── ProtectedRoute.tsx
+│       │   ├── ProtectedRoute.tsx
+│       │   └── QuantitySelector.tsx
 │       ├── context/
-│       │   └── AuthContext.tsx
+│       │   ├── AuthContext.tsx
+│       │   └── CartContext.tsx
 │       ├── hooks/
-│       │   └── useAuth.ts
+│       │   ├── useAuth.ts
+│       │   └── useCart.ts
 │       ├── pages/
 │       │   ├── admin/
 │       │   │   └── AdminProductsPage.tsx
+│       │   ├── CartPage.tsx
 │       │   ├── CatalogPage.tsx
 │       │   ├── LoginPage.tsx
 │       │   ├── ProductDetailPage.tsx
@@ -137,6 +141,7 @@ Arquitectura_E-commerce_Ingesoft-II/
 │       │   └── RegisterPage.tsx
 │       ├── styles/
 │       │   ├── AdminProductsPage.module.css
+│       │   ├── CartPage.module.css
 │       │   ├── CatalogPage.module.css
 │       │   ├── EmptyState.module.css
 │       │   ├── global.css
@@ -148,6 +153,7 @@ Arquitectura_E-commerce_Ingesoft-II/
 │       │   ├── ProductDetailPage.module.css
 │       │   ├── ProductForm.module.css
 │       │   ├── ProfilePage.module.css
+│       │   ├── QuantitySelector.module.css
 │       │   └── RegisterPage.module.css
 │       └── types/
 │           ├── api.ts
@@ -420,8 +426,8 @@ Detalle completo (bodies, códigos de error, ejemplos) en
 | Ruta | Acceso | Página |
 |------|--------|--------|
 | `/` | Público | [`CatalogPage.tsx`](frontend/src/pages/CatalogPage.tsx): catálogo público paginado (10 por página) con búsqueda con debounce; estados de carga, error y vacío |
-| `/product/:id` | Público | [`ProductDetailPage.tsx`](frontend/src/pages/ProductDetailPage.tsx): detalle con cantidad limitada al stock; «Agregar al carrito» deshabilitado pendiente de la UI del carrito |
-| `/cart` | Público | Carrito (placeholder) |
+| `/product/:id` | Público | [`ProductDetailPage.tsx`](frontend/src/pages/ProductDetailPage.tsx): detalle con cantidad limitada al stock; «Agregar al carrito» (F-3.3) con feedback de éxito y errores del backend textualmente para usuarios autenticados |
+| `/cart` | JWT (tras [`ProtectedRoute.tsx`](frontend/src/components/ProtectedRoute.tsx)) | [`CartPage.tsx`](frontend/src/pages/CartPage.tsx): carrito con edición de cantidades (`QuantitySelector`), eliminación de ítems, subtotal provisto por el backend y CTA «Ir a checkout»; estados de carga, error con reintento y vacío |
 | `/checkout` | Público | Checkout (placeholder) |
 | `/login` | Público | [`LoginPage.tsx`](frontend/src/pages/LoginPage.tsx): validación en cliente, redirección por rol tras el login (`ADMIN` → `/admin/products`, `USER` → `/`) y cuentas demo del seed |
 | `/register` | Público | [`RegisterPage.tsx`](frontend/src/pages/RegisterPage.tsx): registro con confirmación de contraseña; tras el `201` redirige a `/login` |
@@ -431,7 +437,7 @@ Detalle completo (bodies, códigos de error, ejemplos) en
 | `/admin/orders` | JWT + `ADMIN` | Panel admin de órdenes (placeholder) |
 | `*` | — | 404 — página no encontrada |
 
-> Las rutas públicas que aún son placeholders (carrito, checkout, órdenes y
+> Las rutas que aún son placeholders (checkout, órdenes y
 > panel admin de órdenes) no aplican guardas todavía; se envolverán con
 > `ProtectedRoute` / `AdminRoute` cuando cada página se implemente.
 

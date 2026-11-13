@@ -14,7 +14,7 @@ Tienda online con autenticación por roles (usuario/administrador), gestión CRU
 |---|---------------|--------------------|-----------|--------|
 | R1 | Autenticación y gestión de usuarios segura | `backend: auth` (JWT + BCrypt); `frontend: pages` (login, registro y perfil) | Endpoints `/api/auth/*`, `/api/users/me`; páginas [`LoginPage.tsx`](../frontend/src/pages/LoginPage.tsx), [`RegisterPage.tsx`](../frontend/src/pages/RegisterPage.tsx), [`ProfilePage.tsx`](../frontend/src/pages/ProfilePage.tsx) | Implementado |
 | R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` con `@PreAuthorize("hasRole('ADMIN')")`; `backend: orders` (gestión admin de órdenes con máquina de estados y restitución de stock); `frontend: pages/admin` (panel de productos) | Endpoints `/api/admin/products/**` (CRUD + stock), `GET /api/admin/orders`, `GET /api/admin/orders/{id}`, `PATCH /api/admin/orders/{id}/status`; panel [`AdminProductsPage.tsx`](../frontend/src/pages/admin/AdminProductsPage.tsx) (CRUD, stock y desactivación) | Implementado |
-| R3 | Carrito y checkout fluidos | `backend: cart` (carrito persistente con validación de stock) + `backend: checkout` (`POST /api/checkout` transaccional con pago simulado); `frontend: api` (capa de datos `api/cart.ts`, `api/checkout.ts` + sesión); páginas de UI en desarrollo | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`, `POST /api/checkout` | Parcial (backend completo; frontend con capa de datos y sesión lista, UI en desarrollo) |
+| R3 | Carrito y checkout fluidos | `backend: cart` (carrito persistente con validación de stock) + `backend: checkout` (`POST /api/checkout` transaccional con pago simulado); `frontend: api` (capa de datos `api/cart.ts`, `api/checkout.ts` + sesión), estado global [`CartContext`](../frontend/src/context/CartContext.tsx)/[`useCart`](../frontend/src/hooks/useCart.ts) y páginas [`CartPage.tsx`](../frontend/src/pages/CartPage.tsx) (edición del carrito) con acciones de agregar en [`ProductCard.tsx`](../frontend/src/components/ProductCard.tsx) y [`ProductDetailPage.tsx`](../frontend/src/pages/ProductDetailPage.tsx) | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`, `POST /api/checkout`; rutas `/` (tarjeta), `/product/:id` (detalle) y `/cart` (protegida) | Carrito implementado (backend + frontend); checkout: backend implementado, UI pendiente (F-4.1) |
 | R4 | Validaciones de stock y pagos | `CartServiceImpl` valida stock en agregar/actualizar; `CheckoutServiceImpl` re-valida stock bajo bloqueo pesimista (`INSUFFICIENT_STOCK`, `CART_EMPTY`) y procesa el pago simulado (`PAYMENT_DECLINED` → orden `PENDING`) | Endpoints de carrito y de checkout + códigos `INSUFFICIENT_STOCK`, `CART_EMPTY`, `PAYMENT_DECLINED` | Implementado (backend) |
 | R5 | Interfaz clara de productos y detalles | `backend: catalog` (catálogo público); `frontend: pages` (catálogo y detalle) con componentes compartidos de la UI ([`CatalogPage.tsx`](../frontend/src/pages/CatalogPage.tsx), [`ProductDetailPage.tsx`](../frontend/src/pages/ProductDetailPage.tsx)) | Endpoints `GET /api/products`, `GET /api/products/{id}`; rutas `/` y `/product/:id` | Implementado |
 
@@ -35,9 +35,10 @@ flowchart TB
     end
 
     subgraph FrontendReactTS
-        P["Paginas: Login, Registro, Perfil, Catálogo, Detalle, Panel admin de productos"]
+        P["Paginas: Login, Registro, Perfil, Catálogo, Detalle, Carrito, Panel admin de productos"]
         G["Guardas de ruta: ProtectedRoute, AdminRoute"]
         C["AuthContext: sesion global JWT + perfil"]
+        K["CartContext: estado global del carrito (fuente: backend)"]
         A["Capa api Axios: cliente + modulos por dominio"]
         T["Tipos TS espejo del contrato"]
     end
@@ -55,6 +56,7 @@ flowchart TB
     B --> P
     P --> G
     P --> C
+    P --> K
     P --> A
     A -. tipos .-> T
     A -- HTTP JSON + JWT --> CTRL
@@ -121,10 +123,12 @@ Página / Componente → api/* (funciones por dominio) → client.ts (Axios) →
   [`frontend/`](../frontend)).
 
 > **Estado actual del frontend:** implementados la infraestructura (Vite/TS/ESLint), la capa
-> de datos completa para todos los dominios de la API, la sesión global, las guardas de ruta,
-> el mapa de rutas ([`App.tsx`](../frontend/src/App.tsx)), las páginas de autenticación
-> (login, registro y perfil, §3.3) y las páginas de catálogo, detalle de producto y panel
-> admin de productos (§3.4); las páginas restantes (carrito, checkout, órdenes y panel
+> de datos completa para todos los dominios de la API, la sesión global, el estado global
+> del carrito ([`CartContext`](../frontend/src/context/CartContext.tsx)/[`useCart`](../frontend/src/hooks/useCart.ts), §3.5),
+> las guardas de ruta, el mapa de rutas ([`App.tsx`](../frontend/src/App.tsx)), las páginas de
+> autenticación (login, registro y perfil, §3.3), las páginas de catálogo, detalle de producto
+> y panel admin de productos (§3.4) y la página de carrito con las acciones de «Agregar al
+> carrito» en catálogo y detalle (§3.5); las páginas restantes (checkout, órdenes y panel
 > admin de órdenes) están en desarrollo con placeholders que describen su comportamiento
 > objetivo.
 
@@ -165,14 +169,14 @@ y los tipos espejo; ningún componente habla con Axios directamente.
 | Página | Ruta | Comportamiento |
 |--------|------|----------------|
 | [`CatalogPage`](../frontend/src/pages/CatalogPage.tsx) | `/` | Catálogo público paginado (`GET /api/products`, 10 por página) con búsqueda con debounce (400 ms); estados de carga, de error con botón «Reintentar» y vacío con «Limpiar búsqueda» cuando hay un filtro activo |
-| [`ProductDetailPage`](../frontend/src/pages/ProductDetailPage.tsx) | `/product/:id` | Detalle del producto (`GET /api/products/{id}`): imagen con fallback, precio en COP y `updatedAt` en formato es-CO; la cantidad queda acotada al stock disponible; 404 → «Producto no encontrado»; «Agregar al carrito» queda deshabilitado pendiente de la UI del carrito (paso F-3.3) |
+| [`ProductDetailPage`](../frontend/src/pages/ProductDetailPage.tsx) | `/product/:id` | Detalle del producto (`GET /api/products/{id}`): imagen con fallback, precio en COP y `updatedAt` en formato es-CO; la cantidad queda acotada al stock disponible; 404 → «Producto no encontrado»; «Agregar al carrito» (F-3.3): los usuarios autenticados agregan la cantidad seleccionada vía `useCart.add` con feedback de éxito y errores del backend textualmente; sin sesión, enlace a login |
 | [`AdminProductsPage`](../frontend/src/pages/admin/AdminProductsPage.tsx) | `/admin/products` (tras [`AdminRoute`](../frontend/src/components/AdminRoute.tsx)) | Gestión de productos: tabla paginada que incluye desactivados, búsqueda, creación y edición vía [`ProductForm`](../frontend/src/components/admin/ProductForm.tsx), ajuste absoluto de stock en línea (entero ≥ 0, `PATCH .../stock`), desactivación con confirmación (soft delete) y mensaje de éxito que se oculta solo a los 4 s |
 
 Componentes compartidos:
 
 | Componente | Uso |
 |------------|-----|
-| [`ProductCard`](../frontend/src/components/ProductCard.tsx) | Tarjeta de la grilla del catálogo: precio en COP con `Intl.NumberFormat` (es-CO), insignia de stock («Agotado», «Quedan N» cuando quedan ≤ 3, o «En stock»), imagen con `loading="lazy"` y fallback de error, y CTA que exige sesión |
+| [`ProductCard`](../frontend/src/components/ProductCard.tsx) | Tarjeta de la grilla del catálogo y del detalle: precio en COP con `Intl.NumberFormat` (es-CO), insignia de stock («Agotado», «Quedan N» cuando quedan ≤ 3, o «En stock»), imagen con `loading="lazy"` y fallback de error, y botón «Agregar al carrito» (F-3.3) que suma 1 unidad vía `useCart.add` con feedback de éxito (2 s) y errores del backend textualmente |
 | [`Pagination`](../frontend/src/components/Pagination.tsx) | Navegación de páginas con ventana con elipsis y `aria-current`; se oculta cuando el resultado ocupa una sola página |
 | [`EmptyState`](../frontend/src/components/EmptyState.tsx) | Estado vacío/error genérico (`role="status"`) con ranura para acciones |
 
@@ -195,6 +199,59 @@ Convenciones comunes a las tres páginas:
   [`Pagination.module.css`](../frontend/src/styles/Pagination.module.css),
   [`EmptyState.module.css`](../frontend/src/styles/EmptyState.module.css) y
   [`ProductForm.module.css`](../frontend/src/styles/ProductForm.module.css)).
+
+### 3.5 Carrito: estado global, página y acciones de agregar (F-3.1, F-3.2, F-3.3)
+
+El módulo de carrito cierra el frontend del requerimiento R3. Sigue la misma
+regla de dependencias que el resto de la SPA: las páginas y componentes
+consumen la capa `api/*` y el contexto global; ningún componente habla con
+Axios directamente.
+
+**Estado global — [`CartContext`](../frontend/src/context/CartContext.tsx) (F-3.1, acceso vía [`useCart`](../frontend/src/hooks/useCart.ts)):**
+
+- **El backend es la única fuente de verdad:** la persistencia vive en
+  `/api/cart/**` (el carrito es por usuario y "persiste entre sesiones", R3);
+  el contexto solo refleja el último `CartResponse` (ítems, `subtotal`
+  calculado en el servidor, `itemCount`). No se almacena en `localStorage`.
+- **Carga al iniciar sesión:** cuando `user` pasa de `null` a un perfil,
+  realiza `GET /api/cart`; al cerrar sesión limpia el estado local. Un
+  contador monótono (`requestIdRef`) descarta respuestas desordenadas ante
+  cambios de sesión o recargas.
+- **Mutaciones contra la API:** `add` (POST `/cart/items`), `update`
+  (PATCH `/cart/items/{itemId}`) y `remove` (DELETE `/cart/items/{itemId}`).
+  El backend devuelve el `CartResponse` completo, que reemplaza el estado:
+  precios capturados por el servidor, subtotal y validación de stock (B-3.2).
+- **Propagación de errores:** los errores de mutación (p. ej. 409
+  `INSUFFICIENT_STOCK`) se propagan al componente llamador como `ApiError`,
+  cuyo mensaje se muestra textualmente (misma convención de §3.3).
+
+El proveedor se monta en [`main.tsx`](../frontend/src/main.tsx) dentro de
+`AuthProvider` (depende de la sesión vía `useAuth`), siguiendo el mismo
+patrón que `AuthContext`/`useAuth` (F-0.4).
+
+**Páginas y componentes:**
+
+| Elemento | Ubicación | Comportamiento |
+|----------|-----------|----------------|
+| [`CartPage`](../frontend/src/pages/CartPage.tsx) | `/cart` (tras [`ProtectedRoute`](../frontend/src/components/ProtectedRoute.tsx)) | Listado de ítems: enlace al producto, precio unitario, total de la línea, [`QuantitySelector`](../frontend/src/components/QuantitySelector.tsx) y botón «Quitar»; cada cambio se persiste vía `useCart.update` / `useCart.remove` con estado pendiente por ítem (controles deshabilitados) y errores por ítem textualmente; si el backend rechaza (409 `INSUFFICIENT_STOCK`), la UI conserva la cantidad confirmada por el servidor. El resumen muestra el subtotal del backend y avisa de que el envío se aplica al finalizar la compra. Estados: carga (spinner), error de carga (con «Reintentar»), vacío (`EmptyState` con CTA al catálogo) y edición. «Ir a checkout» lleva a `/checkout` (placeholder hasta F-4.1) |
+| [`QuantitySelector`](../frontend/src/components/QuantitySelector.tsx) | Reutilizable (usado en `CartPage`) | Componente puro de presentación: input controlado limitado a `[min, max]` en el cliente (ergonomía; la validación real de stock vive en el backend), botones `+`/`−` y estado `busy` que deshabilita el control mientras la petición se persiste |
+| Agregar — [`ProductCard`](../frontend/src/components/ProductCard.tsx) | Catálogo (`/`) | «Agregar al carrito» suma 1 unidad vía `useCart.add` (la tarjeta no trae selector de cantidad); feedback de éxito de 2 s sobre el botón («Agregado ✓»); mensaje del backend textual ante rechazos; sin sesión, enlace a login. La guarda `productIdRef` descarta respuestas de adds obsoletas si la tarjeta se reutiliza para otro producto |
+| Agregar — [`ProductDetailPage`](../frontend/src/pages/ProductDetailPage.tsx) | `/product/:id` | Selector de cantidad (acotado al stock) + «Agregar al carrito» que suma la cantidad elegida vía `useCart.add`; mismos feedback y manejo de errores que `ProductCard` |
+
+Convenciones:
+
+- **Sin validación de stock en cliente:** los controles de cantidad solo
+  acotan por ergonomía; la autoridad es `CartServiceImpl`
+  (409 `INSUFFICIENT_STOCK`) — R4.
+- **Guardas de carrera:** `requestIdRef` (contexto) y `productIdRef`
+  (tarjeta/detalle) descartan respuestas desordenadas ante cambios de sesión
+  o de producto.
+- **Estado pendiente por ítem:** mientras un ítem tiene una mutación en
+  vuelo, sus controles quedan deshabilitados para evitar peticiones
+  duplicadas.
+- **Estilos por módulo:** 2 CSS Modules nuevos
+  ([`CartPage.module.css`](../frontend/src/styles/CartPage.module.css) y
+  [`QuantitySelector.module.css`](../frontend/src/styles/QuantitySelector.module.css)).
 
 ## 4. Diseño de base de datos
 

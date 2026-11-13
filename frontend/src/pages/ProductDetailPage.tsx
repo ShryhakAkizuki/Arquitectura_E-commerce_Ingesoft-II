@@ -6,6 +6,7 @@ import { getProduct } from '../api/products';
 import { EmptyState } from '../components/EmptyState';
 import { ProductCard } from '../components/ProductCard';
 import { useAuth } from '../hooks/useAuth';
+import { useCart } from '../hooks/useCart';
 import type { ProductResponse } from '../types/product';
 
 import styles from '../styles/ProductDetailPage.module.css';
@@ -14,6 +15,8 @@ const dateFormatter = new Intl.DateTimeFormat('es-CO', {
   dateStyle: 'medium',
   timeStyle: 'short',
 });
+
+const ADD_FEEDBACK_MS = 2000;
 
 function clampQuantity(value: number, max: number): number {
   const upper = Math.max(1, Math.trunc(max));
@@ -26,6 +29,7 @@ function clampQuantity(value: number, max: number): number {
 export const ProductDetailPage: FC = () => {
   const { id } = useParams<{ id: string }>();
   const { user, loading: authLoading } = useAuth();
+  const { add } = useCart();
 
   const [product, setProduct] = useState<ProductResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -33,8 +37,15 @@ export const ProductDetailPage: FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [reloadKey, setReloadKey] = useState(0);
   const [quantity, setQuantity] = useState(1);
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState(false);
+  const [addError, setAddError] = useState<string | null>(null);
 
   const requestIdRef = useRef(0);
+  /** Id del producto mostrado (descarta respuestas de adds obsoletas). */
+  const productIdRef = useRef<string | null>(null);
+  /** Temporizador del feedback de éxito (reinicable, evita fugas). */
+  const addTimerRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     if (id === undefined) {
@@ -45,6 +56,9 @@ export const ProductDetailPage: FC = () => {
     setNotFound(false);
     setError(null);
     setProduct(null);
+    productIdRef.current = null;
+    setAdded(false);
+    setAddError(null);
 
     getProduct(id)
       .then((result) => {
@@ -52,6 +66,7 @@ export const ProductDetailPage: FC = () => {
           return;
         }
         setProduct(result);
+        productIdRef.current = result.id;
         setQuantity(1);
       })
       .catch((err: unknown) => {
@@ -76,12 +91,57 @@ export const ProductDetailPage: FC = () => {
       });
   }, [id, reloadKey]);
 
+  useEffect(() => () => {
+    if (addTimerRef.current !== undefined) {
+      window.clearTimeout(addTimerRef.current);
+    }
+  }, []);
+
   const authenticated = !authLoading && user !== null;
   const outOfStock = product !== null && product.stock <= 0;
   const maxQuantity = product !== null ? Math.max(1, product.stock) : 1;
 
   const handleQuantityChange = (event: ChangeEvent<HTMLInputElement>): void => {
     setQuantity(clampQuantity(event.target.valueAsNumber, maxQuantity));
+    setAdded(false);
+    setAddError(null);
+  };
+
+  const handleAddToCart = async (): Promise<void> => {
+    if (product === null || adding || outOfStock) {
+      return;
+    }
+    const targetId = product.id;
+    const requestedQuantity = quantity;
+    setAdding(true);
+    setAddError(null);
+    try {
+      await add({ productId: targetId, quantity: requestedQuantity });
+      if (productIdRef.current !== targetId) {
+        return; // El producto cambió durante la petición: descartar respuesta.
+      }
+      setAdded(true);
+      if (addTimerRef.current !== undefined) {
+        window.clearTimeout(addTimerRef.current);
+      }
+      addTimerRef.current = window.setTimeout(() => {
+        setAdded(false);
+        addTimerRef.current = undefined;
+      }, ADD_FEEDBACK_MS);
+    } catch (err: unknown) {
+      if (productIdRef.current !== targetId) {
+        return;
+      }
+      setAddError(
+        err instanceof ApiError
+          ? err.message
+          : 'No se pudo agregar al carrito. Intente de nuevo.',
+      );
+    } finally {
+      if (productIdRef.current === targetId) {
+        setAdding(false);
+      }
+    }
   };
 
   if (loading) {
@@ -161,17 +221,24 @@ export const ProductDetailPage: FC = () => {
             {authenticated ? (
               <button
                 type="button"
-                className={styles.addButton}
-                disabled
-                title="El agregado al carrito se habilita en el paso F-3.3"
+                className={`${styles.addButton} ${added ? styles.added : ''}`}
+                disabled={adding || outOfStock}
+                onClick={() => void handleAddToCart()}
+                title={outOfStock ? 'Producto sin stock' : 'Agregar al carrito'}
               >
-                Agregar al carrito
+                {adding ? 'Agregando…' : added ? 'Agregado ✓' : 'Agregar al carrito'}
               </button>
             ) : (
               <Link to="/login" className={styles.loginLink}>
                 Iniciar sesión para agregar
               </Link>
             )}
+
+            {addError !== null ? (
+              <p className={styles.addError} role="alert">
+                {addError}
+              </p>
+            ) : null}
           </div>
 
           {outOfStock ? (

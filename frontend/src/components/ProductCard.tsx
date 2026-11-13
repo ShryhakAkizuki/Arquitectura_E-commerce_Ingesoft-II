@@ -1,12 +1,17 @@
-import { useState, type FC } from 'react';
+import { useEffect, useRef, useState, type FC } from 'react';
 import { Link } from 'react-router-dom';
 
+import { ApiError } from '../api/client';
 import { useAuth } from '../hooks/useAuth';
+import { useCart } from '../hooks/useCart';
 import type { ProductResponse } from '../types/product';
 
 import styles from '../styles/ProductCard.module.css';
 
 const LOW_STOCK_THRESHOLD = 3;
+
+/** Duración del feedback de éxito sobre el botón (ms). */
+const ADD_FEEDBACK_MS = 2000;
 
 const priceFormatter = new Intl.NumberFormat('es-CO', {
   style: 'currency',
@@ -20,17 +25,35 @@ function formatPrice(value: number): string {
 
 interface ProductCardProps {
   product: ProductResponse;
-
-  onAddToCart?: (product: ProductResponse) => void;
 }
 
-export const ProductCard: FC<ProductCardProps> = ({ product, onAddToCart }) => {
+export const ProductCard: FC<ProductCardProps> = ({ product }) => {
   const { user, loading } = useAuth();
+  const { add } = useCart();
+
   const [imageFailed, setImageFailed] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [added, setAdded] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const productIdRef = useRef(product.id);
+  productIdRef.current = product.id;
+  const feedbackTimerRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    setAdding(false);
+    setAdded(false);
+    setError(null);
+    return () => {
+      if (feedbackTimerRef.current !== undefined) {
+        window.clearTimeout(feedbackTimerRef.current);
+        feedbackTimerRef.current = undefined;
+      }
+    };
+  }, [product.id]);
 
   const authenticated = !loading && user !== null;
   const outOfStock = product.stock <= 0;
-  const canAdd = authenticated && !outOfStock && typeof onAddToCart === 'function';
 
   const stockBadge = outOfStock ? (
     <span className={`${styles.stock} ${styles.stockOut}`}>Agotado</span>
@@ -39,6 +62,43 @@ export const ProductCard: FC<ProductCardProps> = ({ product, onAddToCart }) => {
   ) : (
     <span className={styles.stock}>En stock</span>
   );
+
+  const handleAddToCart = async (): Promise<void> => {
+    const targetId = product.id;
+    if (adding || outOfStock) {
+      return;
+    }
+    setAdding(true);
+    setError(null);
+    try {
+      await add({ productId: targetId, quantity: 1 });
+      if (productIdRef.current !== targetId) {
+        return; // El producto cambió durante la petición: descartar respuesta.
+      }
+      setAdded(true);
+      if (feedbackTimerRef.current !== undefined) {
+        window.clearTimeout(feedbackTimerRef.current);
+      }
+      feedbackTimerRef.current = window.setTimeout(() => {
+        setAdded(false);
+        feedbackTimerRef.current = undefined;
+      }, ADD_FEEDBACK_MS);
+    } catch (err: unknown) {
+      if (productIdRef.current !== targetId) {
+        return;
+      }
+
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : 'No se pudo agregar al carrito. Intente de nuevo.',
+      );
+    } finally {
+      if (productIdRef.current === targetId) {
+        setAdding(false);
+      }
+    }
+  };
 
   return (
     <article className={styles.card}>
@@ -72,15 +132,23 @@ export const ProductCard: FC<ProductCardProps> = ({ product, onAddToCart }) => {
 
         <div className={styles.footer}>
           {authenticated ? (
-            <button
-              type="button"
-              className={styles.addButton}
-              disabled={!canAdd}
-              onClick={() => onAddToCart?.(product)}
-              title={outOfStock ? 'Producto sin stock' : 'Agregar al carrito'}
-            >
-              Agregar al carrito
-            </button>
+            <>
+              <button
+                type="button"
+                className={`${styles.addButton} ${added ? styles.added : ''}`}
+                disabled={adding || outOfStock}
+                onClick={() => void handleAddToCart()}
+                title={outOfStock ? 'Producto sin stock' : 'Agregar al carrito'}
+              >
+                {adding ? 'Agregando…' : added ? 'Agregado ✓' : 'Agregar al carrito'}
+              </button>
+
+              {error !== null ? (
+                <p className={styles.addError} role="alert">
+                  {error}
+                </p>
+              ) : null}
+            </>
           ) : (
             <Link to="/login" className={styles.loginLink}>
               Iniciar sesión para agregar

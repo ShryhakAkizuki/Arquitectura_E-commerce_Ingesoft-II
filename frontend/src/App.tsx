@@ -5,6 +5,7 @@ import { AdminRoute } from './components/AdminRoute';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { AdminProductsPage } from './pages/admin/AdminProductsPage';
+import { CartPage } from './pages/CartPage';
 import { CatalogPage } from './pages/CatalogPage';
 import { LoginPage } from './pages/LoginPage';
 import { ProductDetailPage } from './pages/ProductDetailPage';
@@ -30,7 +31,11 @@ const App: FC = () => (
       <Route path="/product/:id" element={<ProductDetailPage />} />
       <Route
         path="/cart"
-        element={<PlaceholderPage title="Carrito" description="Edición de cantidades y totales." />}
+        element={
+          <ProtectedRoute>
+            <CartPage />
+          </ProtectedRoute>
+        }
       />
       <Route
         path="/checkout"

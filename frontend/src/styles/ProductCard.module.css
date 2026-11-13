@@ -153,3 +153,19 @@
 .loginLink:hover {
   background-color: rgba(37, 99, 235, 0.15);
 }
+
+.addButton.added {
+  background-color: #16a34a;
+}
+
+.addButton.added:hover:not(:disabled) {
+  background-color: #15803d;
+}
+
+.addError {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--color-danger);
+}
