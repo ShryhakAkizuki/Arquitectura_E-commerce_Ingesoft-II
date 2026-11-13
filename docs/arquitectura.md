@@ -14,8 +14,8 @@ Tienda online con autenticación por roles (usuario/administrador), gestión CRU
 |---|---------------|--------------------|-----------|--------|
 | R1 | Autenticación y gestión de usuarios segura | `backend: auth` (JWT + BCrypt); `frontend: pages` (login, registro y perfil) | Endpoints `/api/auth/*`, `/api/users/me`; páginas [`LoginPage.tsx`](../frontend/src/pages/LoginPage.tsx), [`RegisterPage.tsx`](../frontend/src/pages/RegisterPage.tsx), [`ProfilePage.tsx`](../frontend/src/pages/ProfilePage.tsx) | Implementado |
 | R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` con `@PreAuthorize("hasRole('ADMIN')")`; `backend: orders` (gestión admin de órdenes con máquina de estados y restitución de stock); `frontend: pages/admin` (panel de productos) | Endpoints `/api/admin/products/**` (CRUD + stock), `GET /api/admin/orders`, `GET /api/admin/orders/{id}`, `PATCH /api/admin/orders/{id}/status`; panel [`AdminProductsPage.tsx`](../frontend/src/pages/admin/AdminProductsPage.tsx) (CRUD, stock y desactivación) | Implementado |
-| R3 | Carrito y checkout fluidos | `backend: cart` (carrito persistente con validación de stock) + `backend: checkout` (`POST /api/checkout` transaccional con pago simulado); `frontend: api` (capa de datos `api/cart.ts`, `api/checkout.ts` + sesión), estado global [`CartContext`](../frontend/src/context/CartContext.tsx)/[`useCart`](../frontend/src/hooks/useCart.ts) y páginas [`CartPage.tsx`](../frontend/src/pages/CartPage.tsx) (edición del carrito) con acciones de agregar en [`ProductCard.tsx`](../frontend/src/components/ProductCard.tsx) y [`ProductDetailPage.tsx`](../frontend/src/pages/ProductDetailPage.tsx) | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`, `POST /api/checkout`; rutas `/` (tarjeta), `/product/:id` (detalle) y `/cart` (protegida) | Carrito implementado (backend + frontend); checkout: backend implementado, UI pendiente (F-4.1) |
-| R4 | Validaciones de stock y pagos | `CartServiceImpl` valida stock en agregar/actualizar; `CheckoutServiceImpl` re-valida stock bajo bloqueo pesimista (`INSUFFICIENT_STOCK`, `CART_EMPTY`) y procesa el pago simulado (`PAYMENT_DECLINED` → orden `PENDING`) | Endpoints de carrito y de checkout + códigos `INSUFFICIENT_STOCK`, `CART_EMPTY`, `PAYMENT_DECLINED` | Implementado (backend) |
+| R3 | Carrito y checkout fluidos | `backend: cart` (carrito persistente con validación de stock) + `backend: checkout` (`POST /api/checkout` transaccional con pago simulado); `frontend: api` (capa de datos `api/cart.ts`, `api/checkout.ts` + sesión), estado global [`CartContext`](../frontend/src/context/CartContext.tsx)/[`useCart`](../frontend/src/hooks/useCart.ts) y páginas [`CartPage.tsx`](../frontend/src/pages/CartPage.tsx) (edición del carrito), [`CheckoutPage.tsx`](../frontend/src/pages/CheckoutPage.tsx) (finalizar compra con pago simulado, F-4.1) y acciones de agregar en [`ProductCard.tsx`](../frontend/src/components/ProductCard.tsx) y [`ProductDetailPage.tsx`](../frontend/src/pages/ProductDetailPage.tsx) | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`, `POST /api/checkout`; rutas `/` (tarjeta), `/product/:id` (detalle), `/cart` y `/checkout` (protegidas) | Implementado |
+| R4 | Validaciones de stock y pagos | `CartServiceImpl` valida stock en agregar/actualizar; `CheckoutServiceImpl` re-valida stock bajo bloqueo pesimista (`INSUFFICIENT_STOCK`, `CART_EMPTY`) y procesa el pago simulado (`PAYMENT_DECLINED` → orden `PENDING`); el frontend muestra los rechazos de pago con una pantalla específica ([`CheckoutPage.tsx`](../frontend/src/pages/CheckoutPage.tsx)) | Endpoints de carrito y de checkout + códigos `INSUFFICIENT_STOCK`, `CART_EMPTY`, `PAYMENT_DECLINED` | Implementado |
 | R5 | Interfaz clara de productos y detalles | `backend: catalog` (catálogo público); `frontend: pages` (catálogo y detalle) con componentes compartidos de la UI ([`CatalogPage.tsx`](../frontend/src/pages/CatalogPage.tsx), [`ProductDetailPage.tsx`](../frontend/src/pages/ProductDetailPage.tsx)) | Endpoints `GET /api/products`, `GET /api/products/{id}`; rutas `/` y `/product/:id` | Implementado |
 
 ### 1.2 Criterios de evaluación → estrategia
@@ -35,7 +35,7 @@ flowchart TB
     end
 
     subgraph FrontendReactTS
-        P["Paginas: Login, Registro, Perfil, Catálogo, Detalle, Carrito, Panel admin de productos"]
+        P["Paginas: Login, Registro, Perfil, Catálogo, Detalle, Carrito, Checkout, Panel admin de productos"]
         G["Guardas de ruta: ProtectedRoute, AdminRoute"]
         C["AuthContext: sesion global JWT + perfil"]
         K["CartContext: estado global del carrito (fuente: backend)"]
@@ -127,10 +127,10 @@ Página / Componente → api/* (funciones por dominio) → client.ts (Axios) →
 > del carrito ([`CartContext`](../frontend/src/context/CartContext.tsx)/[`useCart`](../frontend/src/hooks/useCart.ts), §3.5),
 > las guardas de ruta, el mapa de rutas ([`App.tsx`](../frontend/src/App.tsx)), las páginas de
 > autenticación (login, registro y perfil, §3.3), las páginas de catálogo, detalle de producto
-> y panel admin de productos (§3.4) y la página de carrito con las acciones de «Agregar al
-> carrito» en catálogo y detalle (§3.5); las páginas restantes (checkout, órdenes y panel
-> admin de órdenes) están en desarrollo con placeholders que describen su comportamiento
-> objetivo.
+> y panel admin de productos (§3.4), la página de carrito con las acciones de «Agregar al
+> carrito» en catálogo y detalle (§3.5) y la página de checkout con pago simulado
+> (§3.6); las páginas restantes (órdenes y panel admin de órdenes) están en
+> desarrollo con placeholders que describen su comportamiento objetivo.
 
 ### 3.3 Páginas de autenticación implementadas
 
@@ -252,6 +252,49 @@ Convenciones:
 - **Estilos por módulo:** 2 CSS Modules nuevos
   ([`CartPage.module.css`](../frontend/src/styles/CartPage.module.css) y
   [`QuantitySelector.module.css`](../frontend/src/styles/QuantitySelector.module.css)).
+
+### 3.6 Checkout: finalizar compra con pago simulado (F-4.1)
+
+El módulo de checkout cierra el frontend del requerimiento R3 y consume el
+endpoint `POST /api/checkout` ya documentado en §4.6 de [`api.md`](api.md).
+Sigue la misma regla de dependencias que el resto de la SPA: consume la capa
+[`api/checkout.ts`](../frontend/src/api/checkout.ts) y
+[`useCart`](../frontend/src/hooks/useCart.ts); ningún componente habla con
+Axios directamente.
+
+| Elemento | Ubicación | Comportamiento |
+|----------|-----------|----------------|
+| [`CheckoutPage`](../frontend/src/pages/CheckoutPage.tsx) | `/checkout` (tras [`ProtectedRoute`](../frontend/src/components/ProtectedRoute.tsx)) | Formulario en dos secciones — «1 · Dirección de envío» (textarea, ≤ 255) y «2 · Pago» (método `Visa`/`Mastercard`/`PSE`, número de tarjeta y titular) — con un resumen del pedido a la derecha (ítems con `lineTotal`, subtotal del backend, envío fijo y total). Estados: carga del carrito (spinner), error de carga (con «Reintentar»), carrito vacío ([`EmptyState`](../frontend/src/components/EmptyState.tsx) con CTA al catálogo), formulario, éxito y rechazo |
+| Pantalla de éxito | Tras `201` | Muestra `orderNumber` y `total` pagado; llama a `useCart.refresh()` (el backend ya dejó el carrito vacío); CTAs «Ver mis órdenes» (`/orders`, aún placeholder) y «Seguir comprando» (`/`) |
+| Pantalla de pago rechazado | `402 PAYMENT_DECLINED` | Muestra el mensaje del backend tal cual y el `orderNumber` extraído del mensaje (regex `ORD-…`); informa que la orden quedó `PENDING`, que el stock no se descontó y que puede reintentar con otra tarjeta; CTAs «Reintentar el pago» (vuelve al formulario) y «Volver al catálogo» |
+| Otros errores | Cualquier otro `ApiError` | `ApiError.message` en un `<p role="alert">` bajo el formulario (misma convención de §3.3); solo los errores no tipados muestran un mensaje genérico |
+
+Convenciones:
+
+- **Envío fijo:** la constante `SHIPPING_FEE = 5000` del componente espeja
+  el `checkout.shipping-fee` del backend (envío fijo, §4.6 de
+  [`api.md`](api.md)); el total que confirma la compra es el de la
+  respuesta `OrderResponse`, no el del resumen local.
+- **Validación en cliente espejo del backend:** dirección obligatoria
+  (≤ 255), método obligatorio (≤ 30), número de tarjeta de 13–19 dígitos
+  (≤ 25 caracteres); el backend sigue siendo la autoridad.
+- **Formateo de tarjeta:** el input de tarjeta acepta solo dígitos, se
+  agrupa en bloques de 4 mientras se escribe (máx. 19) y usa
+  `inputMode="numeric"` / `autoComplete="cc-number"`.
+- **Ayuda de demo:** el hint del input de tarjeta indica que las tarjetas
+  terminadas en `0002` son rechazadas por la pasarela simulada (para
+  demostrar el flujo de rechazo, §4.6 de [`api.md`](api.md)).
+- **Fuente de verdad del resumen:** los ítems, el subtotal y el total se
+  derivan de `useCart`; la página no recalcula precios.
+- **Estados por botón:** `submitting` deshabilita el envío y cambia la
+  etiqueta ("Procesando pago…").
+- **Ruta protegida:** `/checkout` pasó de pública (placeholder) a protegida
+  con [`ProtectedRoute`](../frontend/src/components/ProtectedRoute.tsx) en
+  [`App.tsx`](../frontend/src/App.tsx); el botón «Ir a checkout» de
+  [`CartPage`](../frontend/src/pages/CartPage.tsx) ya no apunta a un
+  placeholder.
+- **Estilos por módulo:** 1 CSS Module nuevo
+  ([`CheckoutPage.module.css`](../frontend/src/styles/CheckoutPage.module.css)).
 
 ## 4. Diseño de base de datos
 

@@ -5,6 +5,7 @@ import { AdminRoute } from './components/AdminRoute';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { AdminProductsPage } from './pages/admin/AdminProductsPage';
+import { CheckoutPage } from './pages/CheckoutPage';
 import { CartPage } from './pages/CartPage';
 import { CatalogPage } from './pages/CatalogPage';
 import { LoginPage } from './pages/LoginPage';
@@ -40,7 +41,9 @@ const App: FC = () => (
       <Route
         path="/checkout"
         element={
-          <PlaceholderPage title="Checkout" description="Dirección de envío, pago y resultado." />
+          <ProtectedRoute>
+            <CheckoutPage />
+          </ProtectedRoute>
         }
       />
       <Route path="/login" element={<LoginPage />} />
