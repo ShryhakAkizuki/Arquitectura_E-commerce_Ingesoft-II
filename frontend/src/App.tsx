@@ -2,6 +2,10 @@ import type { FC } from 'react';
 import { Route, Routes } from 'react-router-dom';
 
 import { Layout } from './components/Layout';
+import { ProtectedRoute } from './components/ProtectedRoute';
+import { LoginPage } from './pages/LoginPage';
+import { ProfilePage } from './pages/ProfilePage';
+import { RegisterPage } from './pages/RegisterPage';
 
 interface PlaceholderPageProps {
   title: string;
@@ -43,17 +47,15 @@ const App: FC = () => (
           <PlaceholderPage title="Checkout" description="Dirección de envío, pago y resultado." />
         }
       />
-      <Route
-        path="/login"
-        element={<PlaceholderPage title="Iniciar sesión" description="Formulario de login." />}
-      />
-      <Route
-        path="/register"
-        element={<PlaceholderPage title="Registro" description="Formulario de registro." />}
-      />
+      <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
       <Route
         path="/profile"
-        element={<PlaceholderPage title="Perfil" description="Datos personales del usuario." />}
+        element={
+          <ProtectedRoute>
+            <ProfilePage />
+          </ProtectedRoute>
+        }
       />
       <Route
         path="/orders"

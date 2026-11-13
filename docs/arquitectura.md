@@ -12,7 +12,7 @@ Tienda online con autenticación por roles (usuario/administrador), gestión CRU
 
 | # | Requerimiento | Módulo responsable | Evidencia | Estado |
 |---|---------------|--------------------|-----------|--------|
-| R1 | Autenticación y gestión de usuarios segura | `backend: auth` (JWT + BCrypt) | Endpoints `/api/auth/*`, `/api/users/me` | Implementado |
+| R1 | Autenticación y gestión de usuarios segura | `backend: auth` (JWT + BCrypt); `frontend: pages` (login, registro y perfil) | Endpoints `/api/auth/*`, `/api/users/me`; páginas [`LoginPage.tsx`](../frontend/src/pages/LoginPage.tsx), [`RegisterPage.tsx`](../frontend/src/pages/RegisterPage.tsx), [`ProfilePage.tsx`](../frontend/src/pages/ProfilePage.tsx) | Implementado |
 | R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` con `@PreAuthorize("hasRole('ADMIN')")`; `backend: orders` (gestión admin de órdenes con máquina de estados y restitución de stock) | Endpoints `/api/admin/products/**` (CRUD + stock), `GET /api/admin/orders`, `GET /api/admin/orders/{id}`, `PATCH /api/admin/orders/{id}/status` | Implementado |
 | R3 | Carrito y checkout fluidos | `backend: cart` (carrito persistente con validación de stock) + `backend: checkout` (`POST /api/checkout` transaccional con pago simulado); `frontend: api` (capa de datos `api/cart.ts`, `api/checkout.ts` + sesión); páginas de UI en desarrollo | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`, `POST /api/checkout` | Parcial (backend completo; frontend con capa de datos y sesión lista, UI en desarrollo) |
 | R4 | Validaciones de stock y pagos | `CartServiceImpl` valida stock en agregar/actualizar; `CheckoutServiceImpl` re-valida stock bajo bloqueo pesimista (`INSUFFICIENT_STOCK`, `CART_EMPTY`) y procesa el pago simulado (`PAYMENT_DECLINED` → orden `PENDING`) | Endpoints de carrito y de checkout + códigos `INSUFFICIENT_STOCK`, `CART_EMPTY`, `PAYMENT_DECLINED` | Implementado (backend) |
@@ -35,7 +35,7 @@ flowchart TB
     end
 
     subgraph FrontendReactTS
-        P["Paginas (UI en desarrollo)"]
+        P["Paginas: Login, Registro, Perfil (resto en desarrollo)"]
         G["Guardas de ruta: ProtectedRoute, AdminRoute"]
         C["AuthContext: sesion global JWT + perfil"]
         A["Capa api Axios: cliente + modulos por dominio"]
@@ -121,10 +121,38 @@ Página / Componente → api/* (funciones por dominio) → client.ts (Axios) →
   [`frontend/`](../frontend)).
 
 > **Estado actual del frontend:** implementados la infraestructura (Vite/TS/ESLint), la capa
-> de datos completa para todos los dominios de la API, la sesión global, las guardas de ruta
-> y el mapa de rutas ([`App.tsx`](../frontend/src/App.tsx)); las páginas de cada función
-> (catálogo, detalle, carrito, checkout, perfil, órdenes y panel admin) están en
-> desarrollo con placeholders que describen su comportamiento objetivo.
+> de datos completa para todos los dominios de la API, la sesión global, las guardas de ruta,
+> el mapa de rutas ([`App.tsx`](../frontend/src/App.tsx)) y las páginas de autenticación
+> (login, registro y perfil, §3.3); las páginas restantes (catálogo, detalle, carrito,
+> checkout, órdenes y panel admin) están en desarrollo con placeholders que describen su
+> comportamiento objetivo.
+
+### 3.3 Páginas de autenticación implementadas
+
+Las primeras páginas de la UI (rutas `/login`, `/register` y `/profile` en
+[`App.tsx`](../frontend/src/App.tsx)) siguen la misma regla de dependencias que
+el resto de la SPA: consumen `api/*`, [`useAuth`](../frontend/src/hooks/useAuth.ts) y los
+tipos espejo; ningún componente habla con Axios directamente.
+
+| Página | Ruta | Comportamiento |
+|--------|------|----------------|
+| [`LoginPage`](../frontend/src/pages/LoginPage.tsx) | `/login` | Validación en cliente (email y contraseña obligatorios); si ya hay sesión, redirige por rol (`ADMIN` → `/admin/products`, `USER` → `/`); los errores del backend (p. ej. 401 `INVALID_CREDENTIALS`) se muestran textualmente; incluye las cuentas demo del seed |
+| [`RegisterPage`](../frontend/src/pages/RegisterPage.tsx) | `/register` | Validación espejo de `RegisterRequest` (nombre ≤ 100, contraseña 8–72, confirmación); `POST /api/auth/register` → `201`; el 409 `EMAIL_ALREADY_REGISTERED` se muestra textualmente; al éxito redirige a `/login` pasando el email registrado en `state` |
+| [`ProfilePage`](../frontend/src/pages/ProfilePage.tsx) | `/profile` (tras [`ProtectedRoute`](../frontend/src/components/ProtectedRoute.tsx)) | Muestra rol y fecha de alta; edición de nombre, email y contraseña vía `PUT /api/users/me` (contraseña vacía → `null`, no se modifica); si el email cambia, el JWT (subject = email anterior) deja de ser válido: se avisa al usuario y la sesión se cierra a los 2 s para volver a `/login` |
+
+Convenciones comunes a las tres páginas:
+
+- **Doble validación:** la validación en cliente duplica las reglas de Bean
+  Validation del backend para reducir la latencia percibida; el backend sigue
+  siendo la autoridad (códigos de negocio + re-validación).
+- **Errores del backend tal cual:** `ApiError.message` se muestra en un
+  `<p role="alert">`; solo los errores no tipados muestran un mensaje genérico.
+- **Estados por botón:** `submitting` deshabilita el envío y cambia la etiqueta
+  ("Iniciando sesión…", "Creando cuenta…", "Guardando…").
+- **Estilos por módulo:** [`LoginPage.module.css`](../frontend/src/styles/LoginPage.module.css),
+  [`RegisterPage.module.css`](../frontend/src/styles/RegisterPage.module.css) y
+  [`ProfilePage.module.css`](../frontend/src/styles/ProfilePage.module.css)
+  (CSS Modules, sin estilos globales por página).
 
 ## 4. Diseño de base de datos
 
