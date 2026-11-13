@@ -4,11 +4,14 @@ import { Route, Routes } from 'react-router-dom';
 import { AdminRoute } from './components/AdminRoute';
 import { Layout } from './components/Layout';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { AdminOrdersPage } from './pages/admin/AdminOrdersPage';
 import { AdminProductsPage } from './pages/admin/AdminProductsPage';
 import { CheckoutPage } from './pages/CheckoutPage';
 import { CartPage } from './pages/CartPage';
 import { CatalogPage } from './pages/CatalogPage';
 import { LoginPage } from './pages/LoginPage';
+import { MyOrdersPage } from './pages/MyOrdersPage';
+import { OrderDetailPage } from './pages/OrderDetailPage';
 import { ProductDetailPage } from './pages/ProductDetailPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { RegisterPage } from './pages/RegisterPage';
@@ -58,12 +61,18 @@ const App: FC = () => (
       />
       <Route
         path="/orders"
-        element={<PlaceholderPage title="Mis órdenes" description="Listado de órdenes del usuario." />}
+        element={
+          <ProtectedRoute>
+            <MyOrdersPage />
+          </ProtectedRoute>
+        }
       />
       <Route
         path="/orders/:id"
         element={
-          <PlaceholderPage title="Detalle de orden" description="Ítems, totales y estados." />
+          <ProtectedRoute>
+            <OrderDetailPage />
+          </ProtectedRoute>
         }
       />
       <Route
@@ -77,7 +86,9 @@ const App: FC = () => (
       <Route
         path="/admin/orders"
         element={
-          <PlaceholderPage title="Panel admin · Órdenes" description="Gestión de estados de órdenes." />
+          <AdminRoute>
+            <AdminOrdersPage />
+          </AdminRoute>
         }
       />
       <Route
