@@ -20,7 +20,7 @@ public interface ProductRepository extends JpaRepository<Product, UUID> {
 
     @Query("""
             SELECT p FROM Product p
-            WHERE (:search IS NULL OR LOWER(p.name) LIKE LOWER(CONCAT('%', :search, '%')))
+            WHERE LOWER(p.name) LIKE LOWER(CONCAT('%', :search, '%'))
               AND (:onlyAvailable = FALSE OR p.available = TRUE)
             """)
     Page<Product> findCatalogPage(@Param("search") String search,
