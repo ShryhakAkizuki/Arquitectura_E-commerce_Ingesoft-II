@@ -8,7 +8,7 @@ manera incremental: la documentación describe **solo lo implementado hasta el
 último commit** y las secciones de cada módulo se añaden cuando el módulo se
 implementa.
 
-**Última actualización de la documentación:** 2026-11-12.
+**Última actualización de la documentación:** 2026-11-13.
 
 ---
 
@@ -23,6 +23,7 @@ implementa.
 | **Carrito** (ver, agregar, cambiar cantidad, eliminar ítem) | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`; validación de stock `INSUFFICIENT_STOCK` |
 | **Checkout** (crear orden con pago simulado) | Endpoint `POST /api/checkout`; transaccional con bloqueos pesimistas (`SELECT ... FOR UPDATE`) contra sobreventa; pago simulado con tarjeta de rechazo configurable; la orden queda `PENDING` si el pago se rechaza |
 | **Órdenes** (consultar las propias y gestión admin) | Endpoints `GET /api/orders/mine`, `GET /api/orders/mine/{id}` (usuario) y `GET /api/admin/orders`, `GET /api/admin/orders/{id}`, `PATCH /api/admin/orders/{id}/status` (admin); máquina de estados `PENDING → PAID → SHIPPED → DELIVERED` (+ `CANCELLED`); restitución de stock al cancelar una orden `PAID` |
+| **Frontend** (React 18 + TypeScript + Vite, SPA) | Sesión global con JWT + perfil ([`AuthContext.tsx`](frontend/src/context/AuthContext.tsx)), capa de datos Axios espejo del contrato del backend ([`api/`](frontend/src/api)), rutas protegidas ([`ProtectedRoute.tsx`](frontend/src/components/ProtectedRoute.tsx), [`AdminRoute.tsx`](frontend/src/components/AdminRoute.tsx)) y navegación por sesión con insignia de carrito ([`Navbar.tsx`](frontend/src/components/Navbar.tsx)); páginas de la UI en desarrollo (placeholders) |
 | **Seguridad** (Spring Security, roles, filtros JWT, errores 401/403) | Política de rutas por rol en [`SecurityConfig.java`](backend/src/main/java/com/ingesoft/shop/config/SecurityConfig.java) |
 | **Excepciones globales** (contrato de error `ApiError` + `ErrorCode`) | [`GlobalExceptionHandler.java`](backend/src/main/java/com/ingesoft/shop/exception/GlobalExceptionHandler.java) |
 | **Documentación** (arquitectura, API) | Carpeta [`docs/`](docs) |
@@ -61,11 +62,17 @@ Documentación interactiva de la API (Swagger UI, disponible al ejecutar el back
 | JUnit 5 + Mockito | (test) | Pruebas unitarias |
 | spring-security-test | (test) | Pruebas de contrato de API con MockMvc |
 
-### Frontend (en desarrollo)
+### Frontend
 
-| Tecnología | Propósito |
-|------------|-----------|
-| React | UI (pendiente de inicializar en [`frontend/`](frontend)) |
+| Tecnología | Versión | Propósito |
+|------------|---------|-----------|
+| React | 18.3 | UI |
+| TypeScript | 5.6 | Tipado estático del contrato del backend |
+| Vite | 5.4 | Dev server (puerto `5173` fijo) y build |
+| React Router | 6.28 | Ruteo de la SPA |
+| Axios | 1.7 | Cliente HTTP con inyección de JWT |
+| ESLint | 8.57 | Linter (`npm run lint` en `frontend/`) |
+| Prettier | 3.4 | Formateador (`npm run format` en `frontend/`) |
 
 ### Raíz del monorepo
 
@@ -87,8 +94,44 @@ Arquitectura_E-commerce_Ingesoft-II/
 │   └── arquitectura.md
 ├── scripts/
 │   └── .gitkeep
-├── frontend/                     # Frontend (por implementar)
-│   └── .gitkeep
+├── frontend/                     # Frontend (React 18 + TypeScript + Vite)
+│   ├── index.html
+│   ├── package.json
+│   ├── vite.config.ts
+│   ├── tsconfig.json
+│   ├── tsconfig.node.json
+│   ├── .eslintrc.cjs
+│   ├── .prettierrc
+│   └── src/
+│       ├── main.tsx
+│       ├── App.tsx
+│       ├── api/
+│       │   ├── client.ts
+│       │   ├── admin.ts
+│       │   ├── auth.ts
+│       │   ├── cart.ts
+│       │   ├── checkout.ts
+│       │   ├── orders.ts
+│       │   └── products.ts
+│       ├── components/
+│       │   ├── AdminRoute.tsx
+│       │   ├── Layout.tsx
+│       │   ├── Navbar.tsx
+│       │   └── ProtectedRoute.tsx
+│       ├── context/
+│       │   └── AuthContext.tsx
+│       ├── hooks/
+│       │   └── useAuth.ts
+│       ├── styles/
+│       │   ├── global.css
+│       │   ├── Layout.module.css
+│       │   └── Navbar.module.css
+│       └── types/
+│           ├── api.ts
+│           ├── auth.ts
+│           ├── cart.ts
+│           ├── order.ts
+│           └── product.ts
 └── backend/
     ├── mvnw / mvnw.cmd           # Maven Wrapper
     ├── pom.xml
@@ -197,7 +240,7 @@ Arquitectura_E-commerce_Ingesoft-II/
 |-------------|----------------|-------|
 | JDK | 17 | Se recomienda 17 LTS o superior |
 | Maven | 3.8+ | **No es necesario instalarlo**: el proyecto incluye `mvnw` / `mvnw.cmd` (Maven Wrapper) |
-| Node.js | ≥ 18 | Solo para el script raíz `npm run dev` (concurrently). El frontend aún no está implementado |
+| Node.js | ≥ 18 | Script raíz `npm run dev` (concurrently) y frontend (Vite, ESLint, Prettier) |
 | PostgreSQL | 15+ | **Requerida** para el perfil por defecto. Sin PostgreSQL use el perfil `h2` (plan B, ver [Ejecución](#ejecución)) |
 
 ### Base de datos (perfil por defecto: `postgres`)
@@ -264,14 +307,15 @@ Swagger UI: <http://localhost:8080/swagger-ui.html>.
 
 ### 2. Frontend
 
-⏳ **Aún no implementado.** Cuando exista código en [`frontend/`](frontend),
-la intención es:
-
 ```bash
 cd frontend
 npm install
 npm run dev   # Vite → http://localhost:5173
 ```
+
+Por defecto la API apunta a `http://localhost:8080/api`; para señalar otro
+entorno, cree `frontend/.env.local` con
+`VITE_API_URL=http://<host>:8080/api` ([`client.ts`](frontend/src/api/client.ts)).
 
 ### 3. Todo junto (script raíz)
 
@@ -280,8 +324,8 @@ npm install   # una sola vez
 npm run dev   # levanta backend y frontend con concurrently
 ```
 
-> Mientras `frontend/` esté vacío, `npm run dev` falla en el proceso
-> `frontend` (no hay `package.json`); el backend sí arranca.
+> El script raíz `backend` usa `mvnw.cmd` (Windows); en Linux/macOS ajuste el
+> script en [package.json](package.json) a `cd backend && ./mvnw spring-boot:run`.
 
 ### Pruebas
 

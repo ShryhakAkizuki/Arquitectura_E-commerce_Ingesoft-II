@@ -14,9 +14,9 @@ Tienda online con autenticación por roles (usuario/administrador), gestión CRU
 |---|---------------|--------------------|-----------|--------|
 | R1 | Autenticación y gestión de usuarios segura | `backend: auth` (JWT + BCrypt) | Endpoints `/api/auth/*`, `/api/users/me` | Implementado |
 | R2 | CRUD productos, stock y órdenes para administradores | `backend: catalog` con `@PreAuthorize("hasRole('ADMIN')")`; `backend: orders` (gestión admin de órdenes con máquina de estados y restitución de stock) | Endpoints `/api/admin/products/**` (CRUD + stock), `GET /api/admin/orders`, `GET /api/admin/orders/{id}`, `PATCH /api/admin/orders/{id}/status` | Implementado |
-| R3 | Carrito y checkout fluidos | `backend: cart` (carrito persistente con validación de stock) + `backend: checkout` (`POST /api/checkout` transaccional con pago simulado); `frontend: cart/checkout` pendiente | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`, `POST /api/checkout` | Parcial (backend de carrito y checkout implementado; frontend pendiente) |
+| R3 | Carrito y checkout fluidos | `backend: cart` (carrito persistente con validación de stock) + `backend: checkout` (`POST /api/checkout` transaccional con pago simulado); `frontend: api` (capa de datos `api/cart.ts`, `api/checkout.ts` + sesión); páginas de UI en desarrollo | Endpoints `GET /api/cart`, `POST /api/cart/items`, `PATCH|DELETE /api/cart/items/{itemId}`, `POST /api/checkout` | Parcial (backend completo; frontend con capa de datos y sesión lista, UI en desarrollo) |
 | R4 | Validaciones de stock y pagos | `CartServiceImpl` valida stock en agregar/actualizar; `CheckoutServiceImpl` re-valida stock bajo bloqueo pesimista (`INSUFFICIENT_STOCK`, `CART_EMPTY`) y procesa el pago simulado (`PAYMENT_DECLINED` → orden `PENDING`) | Endpoints de carrito y de checkout + códigos `INSUFFICIENT_STOCK`, `CART_EMPTY`, `PAYMENT_DECLINED` | Implementado (backend) |
-| R5 | Interfaz clara de productos y detalles | `backend: catalog` (catálogo público); `frontend: catalog` pendiente | Endpoints `GET /api/products`, `GET /api/products/{id}` | Parcial (frontend pendiente) |
+| R5 | Interfaz clara de productos y detalles | `backend: catalog` (catálogo público); `frontend: api` (capa de datos `api/products.ts`, tipos `types/product.ts` y rutas públicas); páginas de UI en desarrollo | Endpoints `GET /api/products`, `GET /api/products/{id}` | Parcial (frontend con capa de datos lista, UI en desarrollo) |
 
 ### 1.2 Criterios de evaluación → estrategia
 
@@ -35,9 +35,11 @@ flowchart TB
     end
 
     subgraph FrontendReactTS
-        P[Paginas]
-        C[Contextos Auth y Cart]
-        A[Axios con interceptor de token]
+        P["Paginas (UI en desarrollo)"]
+        G["Guardas de ruta: ProtectedRoute, AdminRoute"]
+        C["AuthContext: sesion global JWT + perfil"]
+        A["Capa api Axios: cliente + modulos por dominio"]
+        T["Tipos TS espejo del contrato"]
     end
 
     subgraph BackendSpringBoot
@@ -51,8 +53,10 @@ flowchart TB
     DB[(PostgreSQL local)]
 
     B --> P
+    P --> G
     P --> C
     P --> A
+    A -. tipos .-> T
     A -- HTTP JSON + JWT --> CTRL
     CTRL --> SVC
     SVC --> REPO
@@ -74,6 +78,53 @@ Controller → Service (interface) → Repository → Database
 - Los **repositorios** son la única capa que conoce a las entidades JPA. Los servicios devuelven DTOs hacia afuera (la entidad no "fuga" fuera de la capa de datos).
 - **Paginación y búsqueda** vía `Pageable` de Spring Data, no en el controlador.
 - **Calidad de código:** Checkstyle corre en la fase `validate` del build (severidad `warning` ya rompe el build), configuración en [`checkstyle.xml`](../backend/checkstyle.xml).
+
+### 3.2 Capas frontend y regla de dependencias
+
+El frontend es una SPA (**React 18 + TypeScript + Vite**) en [`frontend/`](../frontend), con
+**React Router** para el ruteo y **Axios** como único cliente HTTP:
+
+```
+Página / Componente → api/* (funciones por dominio) → client.ts (Axios) → Backend
+        ↓                    ↓
+  context/hooks        types/* (espejo del contrato)
+```
+
+- **Capa de datos única** ([`api/`](../frontend/src/api)): un módulo por dominio de la API
+  (`auth.ts`, `products.ts`, `cart.ts`, `checkout.ts`, `orders.ts`, `admin.ts`).
+  Ningún componente usa Axios directamente: siempre consume `api/*` (DRY, §8).
+- **Tipos espejo del contrato** ([`types/`](../frontend/src/types)): cada interfaz declara el
+  DTO de backend que refleja (p. ej. [`types/api.ts`](../frontend/src/types/api.ts) espeja
+  `ApiError` y `Page<T>` de Spring Data). El contrato de errores del backend se vuelve un
+  error tipado ([`ApiError`](../frontend/src/api/client.ts) en [`client.ts`](../frontend/src/api/client.ts))
+  con `code` y `message` listos para mostrarse textualmente en la UI.
+- **Sesión global** ([`AuthContext.tsx`](../frontend/src/context/AuthContext.tsx), acceso vía
+  [`useAuth`](../frontend/src/hooks/useAuth.ts)): única fuente de verdad de la sesión.
+  Persiste el JWT (clave `shop_token`) y un perfil cacheado (`shop_profile`) para pintar la
+  UI sin esperar la red; al montar valida el token con `GET /users/me` y el backend
+  siempre prevalece. El interceptor de [`client.ts`](../frontend/src/api/client.ts) inyecta el
+  JWT en cada petición y, ante `401` (salvo en el propio login), limpia la sesión y
+  redirige a `/login`.
+- **Guardas de ruta:** [`ProtectedRoute`](../frontend/src/components/ProtectedRoute.tsx) exige
+  sesión (redirige a `/login` guardando la ruta de origen);
+  [`AdminRoute`](../frontend/src/components/AdminRoute.tsx) exige además rol `ADMIN` y muestra
+  una pantalla 403 explícita. Mientras se valida el token persistido (`loading`), la
+  navegación queda en estado de espera: evita el "destello" de enlaces o 403 equivocados.
+- **Navegación por sesión** ([`Navbar.tsx`](../frontend/src/components/Navbar.tsx)): rama
+  anónima (login/registro) vs. autenticada (carrito con insignia de cantidad, órdenes,
+  perfil, panel admin solo si `role === 'ADMIN'`).
+- **Contrato de red del monorepo:** el dev server de Vite corre en el puerto **5173 fijo**
+  ([`vite.config.ts`](../frontend/vite.config.ts)) porque el CORS del backend apunta a
+  `http://localhost:5173`; la URL base de la API se configura con `VITE_API_URL`
+  (default `http://localhost:8080/api`).
+- **Calidad de código:** ESLint + Prettier (`npm run lint` / `npm run format` en
+  [`frontend/`](../frontend)).
+
+> **Estado actual del frontend:** implementados la infraestructura (Vite/TS/ESLint), la capa
+> de datos completa para todos los dominios de la API, la sesión global, las guardas de ruta
+> y el mapa de rutas ([`App.tsx`](../frontend/src/App.tsx)); las páginas de cada función
+> (catálogo, detalle, carrito, checkout, perfil, órdenes y panel admin) están en
+> desarrollo con placeholders que describen su comportamiento objetivo.
 
 ## 4. Diseño de base de datos
 
