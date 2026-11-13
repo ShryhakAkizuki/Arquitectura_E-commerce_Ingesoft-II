@@ -1,0 +1,36 @@
+.layout {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+.skipLink {
+  position: absolute;
+  top: -100%;
+  left: 1rem;
+  z-index: 30;
+  background-color: var(--color-primary);
+  color: #ffffff;
+  padding: 0.5rem 1rem;
+  border-radius: 0 0 var(--radius) var(--radius);
+  text-decoration: none;
+}
+
+.skipLink:focus {
+  top: 0;
+}
+
+.main {
+  flex: 1 1 auto;
+  width: 100%;
+}
+
+.footer {
+  margin-top: auto;
+  padding: 1rem var(--spacing);
+  text-align: center;
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  background-color: var(--color-surface);
+  border-top: 1px solid rgba(31, 41, 51, 0.08);
+}
