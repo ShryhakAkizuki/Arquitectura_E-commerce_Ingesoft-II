@@ -475,24 +475,73 @@ Códigos de negocio: `EMAIL_ALREADY_REGISTERED`, `INVALID_CREDENTIALS`, `PRODUCT
 - **Frontend:** interceptores centralizados de Axios, estados de carga/error/vacío en cada página de listado, mensajes de error del backend mostrados textualmente.
 - **Linters:** Checkstyle (backend, **ya activo** en la fase `validate` del build) + ESLint + Prettier.
 
-## 8. Estrategia de pruebas
+## 8. Pruebas y calidad (estado final)
 
-> Estrategia planificada: aún no hay tests en el repositorio; se escriben conforme se avanza por módulo.
+### 8.1 Pruebas implementadas (26 backend + 13 frontend, todas en verde)
 
-| Capa | Herramienta | Casos prioritarios |
-|------|-------------|--------------------|
-| Servicios backend | JUnit 5 + Mockito | `CartService`: stock insuficiente al agregar/actualizar (`INSUFFICIENT_STOCK`), acumulación de cantidad, subtotal correcto, ítem ajeno al carrito → 404; `CheckoutService`: stock insuficiente, pago rechazado (se conserva `PENDING`), éxito (stock descontado y carrito vacío); `OrderAdminService`: transición válida (`PAID → SHIPPED`), transición inválida → `ORDER_STATUS_INVALID` (`DELIVERED → SHIPPED`), cancelación `PAID → CANCELLED` repone el stock; `OrderService`: orden ajena al usuario → `ORDER_NOT_FOUND`; `PaymentService`: mapeo de estados; `ProductService`: validaciones de creación/actualización; `AuthService`: hash de contraseña y emisión de token |
-| API backend | Spring Boot Test + MockMvc | Contrato de `/auth/register`, `/checkout` (409/402/201), permisos admin (403 a usuario común) |
-| Componentes frontend | Vitest + React Testing Library | `ProductCard` (agregar al carrito), ítem de carrito (cambiar cantidad), `CheckoutPage` (formulario inválido, resultado de error) |
+| Capa | Herramienta | Tests | Casos cubiertos |
+|------|-------------|-------|-----------------|
+| Servicios backend | JUnit 5 + Mockito | `AuthServiceTest` (5), `ProductServiceTest` (5), `CheckoutServiceTest` (4), `PaymentServiceTest` (4) | `AuthService`: email repetido, credenciales inválidas, login emite token; `ProductService`: validaciones de creación, listado solo `available`; `CheckoutService`: stock insuficiente (nada se persiste), pago rechazado (se conserva `PENDING`, stock intacto), éxito (stock descontado, carrito vacío); `PaymentService`: mapeo CONFIRMED/FAILED |
+| API backend | Spring Boot Test + MockMvc | `AuthApiTest` (2), `CheckoutApiTest` (3), `AdminAccessTest` (3) | Contrato de `/auth/register` (201/409), `/checkout` (409/402/201), permisos admin (403 a usuario común) |
+| Componentes frontend | Vitest + React Testing Library | `ProductCard` (7), `CartPage` (3), `CheckoutPage` (3) | `ProductCard`: muestra datos y dispara «agregar al carrito»; ítem de carrito: cambiar cantidad dispara la acción; `CheckoutPage`: formulario inválido bloquea el envío y el resultado de error muestra motivo con reintento |
 
-Cada test documenta **arrangement–action–assertion** y el requerimiento que cubre (comentario `// R4:`) → evidencia directa para la sustentación.
+Cada test documenta **arrangement–action–assertion** y el requerimiento que cubre (comentario `// R4:`) → evidencia directa para la sustentación. Ejecución: `mvnw.cmd test` (backend) y `npm run test` (frontend).
+
+### 8.2 Verificación end-to-end (paso D-6)
+
+El guion completo de los puntos de control **CP-1…CP-5** se verifica de extremo a extremo con [`scripts/e2e-checkpoints.ps1`](../scripts/e2e-checkpoints.ps1): contra una **base de datos limpia** (Flyway re-migra V1+V2) y el backend corriendo, el script ejecuta 57 aserciones sobre la API real (registro → login → perfil → 403 admin; catálogo + CRUD admin; carrito con persistencia y `INSUFFICIENT_STOCK`; checkout exitoso con descuento de stock, rechazo `...0002` con orden `PENDING` y stock intacto, y reintento; mis órdenes, `PAID → SHIPPED → DELIVERED`, transición inválida y cancelación con restitución de stock).
+
+```powershell
+# Con el backend corriendo contra una BD limpia:
+powershell -ExecutionPolicy Bypass -File scripts\e2e-checkpoints.ps1
+# (Opcional) recrea la BD `shop` antes:
+powershell -ExecutionPolicy Bypass -File scripts\e2e-checkpoints.ps1 -ResetDb
+```
+
+Resultado del cierre (2026-11-22): **57/57 aserciones en verde**. Las capturas del flujo en la UI se generan con [`scripts/capture-screenshots.cjs`](../scripts/capture-screenshots.cjs) y se publican en [`docs/screenshots/`](screenshots).
 
 ## 9. Riesgos y mitigaciones
 
 | Riesgo | Mitigación |
 |--------|-----------|
 | PostgreSQL no instalado en la máquina de sustentación | Perfil `h2` en memoria (`--spring.profiles.active=h2`), **ya configurado** en `application.yml` y con H2 en `pom.xml` |
-| Sobreventa por compras concurrentes | Bloqueo pesimista **implementado**: `findByCartIdForUpdate` y `findByIdForUpdate` (`PESSIMISTIC_WRITE`) en el checkout (ADR-015) + test de concurrencia pendiente |
+| Sobreventa por compras concurrentes | Bloqueo pesimista **implementado**: `findByCartIdForUpdate` y `findByIdForUpdate` (`PESSIMISTIC_WRITE`) en el checkout (ADR-015); la validación de stock ocurre dentro del bloqueo y `CheckoutServiceTest` cubre el caso de stock insuficiente. Un test de carga concurrente queda como mejora (ver §10) |
 | Alcance que crece en la sustentación | El MVP está acotado; mejoras (gateway real, Docker, despliegue) se documentan como roadmap en los ADR, no se implementan |
 | Diferencia de versiones JDK/Node | Maven wrapper en backend + `engines` en `package.json` + requisitos en README |
 
+## 10. Cierre: verificación E2E y evidencias visuales
+
+> Paso **D-6** del plan de ejecución: README final, ejecución end-to-end del guion
+> completo desde cero y commit de cierre.
+
+### 10.1 Ejecución end-to-end (CP-1…CP-5) desde BD limpia
+
+- **Método:** [`scripts/e2e-checkpoints.ps1`](../scripts/e2e-checkpoints.ps1) contra una BD `shop` recreada desde cero (Flyway re-migra V1+V2), con el backend corriendo en su perfil por defecto.
+- **Cobertura:** 57 aserciones que recorren los cinco puntos de control:
+  - **CP-1** — registro (201/409), login, `GET /users/me`, ruta admin denegada (403).
+  - **CP-2** — catálogo (8 productos del seed, búsqueda, detalle), CRUD admin completo (crear, actualizar, stock, soft delete → 404 en público).
+  - **CP-3** — carrito: agregar, acumular, cambiar cantidad, subtotal derivado, persistencia ante re-lectura, `INSUFFICIENT_STOCK` (409).
+  - **CP-4** — checkout exitoso (201, `PAID`, stock 25→24, carrito vacío), rechazo con tarjeta `...0002` (402 `PAYMENT_DECLINED`, stock intacto, orden `PENDING` visible en admin) y reintento exitoso (201).
+  - **CP-5** — mis órdenes (listado + detalle + aislamiento 404), admin `PAID → SHIPPED → DELIVERED`, transición inválida (409 `ORDER_STATUS_INVALID`) y cancelación `PAID → CANCELLED` con restitución de stock (24→25).
+- **Resultado del cierre (2026-11-22): 57/57 aserciones en verde.**
+
+### 10.2 Capturas del flujo (`docs/screenshots/`)
+
+Generadas sobre la UI real (backend + frontend corriendo) por
+[`scripts/capture-screenshots.cjs`](../scripts/capture-screenshots.cjs):
+
+| # | Pantalla | Evidencia |
+|---|----------|-----------|
+| 01 | [Catálogo](screenshots/01-catalogo.png) | Grid público paginado (R5) |
+| 02 | [Detalle de producto](screenshots/02-detalle-producto.png) | Precio, stock, «Agregar al carrito» (R5) |
+| 03 | [Login](screenshots/03-login.png) | Formulario + cuentas demo (R1) |
+| 04 | [Carrito](screenshots/04-carrito.png) | Ítems, cantidades, subtotal (R3) |
+| 05 | [Checkout (formulario)](screenshots/05-checkout-form.png) | Dirección + pago + resumen (R3) |
+| 06 | [Checkout (éxito)](screenshots/06-checkout-exito.png) | Orden `PAID` creada (R3/R4) |
+| 07 | [Checkout (rechazado)](screenshots/07-checkout-rechazado.png) | `PAYMENT_DECLINED` con reintento (R4) |
+| 08 | [Mis órdenes](screenshots/08-mis-ordenes.png) | Historial con insignias de estado (R2) |
+| 09 | [Detalle de orden](screenshots/09-detalle-orden.png) | Ítems, totales, pago (R2) |
+| 10 | [Perfil](screenshots/10-perfil.png) | Datos personales (R1) |
+| 11 | [Admin: productos](screenshots/11-admin-productos.png) | CRUD + stock + desactivación (R2) |
+| 12 | [Admin: órdenes](screenshots/12-admin-ordenes.png) | Filtros + transiciones de estado (R2) |
+| 13 | [Swagger UI](screenshots/13-swagger.png) | API documentada interactivamente (§6) |
