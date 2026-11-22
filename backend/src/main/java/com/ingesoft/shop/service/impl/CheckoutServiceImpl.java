@@ -77,6 +77,10 @@ public class CheckoutServiceImpl implements ICheckoutService {
         return outcome.orderResponse();
     }
 
+    /**
+     * Ejecuta el flujo completo del §6 dentro de la transacción del
+     * llamador.
+     */
     private CheckoutOutcome performCheckout(String email, CheckoutRequest request) {
         User user = findUserByEmail(email);
         Cart cart = findOrCreateCart(user);

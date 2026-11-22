@@ -12,7 +12,11 @@ import com.ingesoft.shop.dto.response.CartResponse;
 public interface ICartService {
 
     CartResponse get(String email);
+
+
     CartResponse add(String email, AddCartItemRequest request);
+
     CartResponse updateQuantity(String email, UUID itemId, UpdateCartItemRequest request);
+
     CartResponse remove(String email, UUID itemId);
 }

@@ -37,7 +37,7 @@ import jakarta.servlet.http.HttpServletResponse;
  * {@link UsernamePasswordAuthenticationFilter} para autenticar cada peticion
  * a partir del token Bearer. 
  *
- * <p>El {@code PasswordEncoder} es BCrypt: nunca se almacena ni compara
+ * <p>El {@code PasswordEncoder} es BCrypt (§4): nunca se almacena ni compara
  * una contrasena en texto plano.
  */
 @Configuration
@@ -45,7 +45,7 @@ import jakarta.servlet.http.HttpServletResponse;
 @EnableMethodSecurity
 public class SecurityConfig {
 
-    /** Rutas públicas de SpringDoc / Swagger UI (sin autenticacion). */
+    /** Rutas públicas de SpringDoc / Swagger UI (sin autenticacion, §5). */
     private static final String[] SWAGGER_PUBLIC_PATHS = {
             "/swagger-ui.html",
             "/swagger-ui/**",
@@ -56,7 +56,7 @@ public class SecurityConfig {
             "/api-docs/**"
     };
 
-    /** Rutas que exigen un usuario autenticado, con cualquier rol. */
+    /** Rutas que exigen un usuario autenticado, con cualquier rol (§5). */
     private static final String[] AUTHENTICATED_PATHS = {
             "/api/users/**",
             "/api/cart/**",

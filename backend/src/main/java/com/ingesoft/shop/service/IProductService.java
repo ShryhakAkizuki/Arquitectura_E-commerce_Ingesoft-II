@@ -12,5 +12,6 @@ import com.ingesoft.shop.dto.response.ProductResponse;
 public interface IProductService {
 
     Page<ProductResponse> list(int page, int size, String search, String sort);
+
     ProductResponse getById(UUID id);
 }
