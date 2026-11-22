@@ -4,12 +4,19 @@
 **Formato:** JSON (UTF-8) · **Autenticación:** `Authorization: Bearer <token>`
 **Swagger UI (interactivo):** <http://localhost:8080/swagger-ui.html>
 
+> **Cómo leer esta guía:** cada endpoint de [`arquitectura.md` §5](arquitectura.md) está
+> documentado con su `curl` real y su respuesta de éxito. Los tres errores típicos que pide
+> la prueba técnica — **409** (conflicto de stock/estado), **402** (pago rechazado) y
+> **403** (rol insuficiente) — se demuestran con `curl` y cuerpo de respuesta en la
+> [sección 4](#4-endpoints-documentados), y se recopilan en la
+> [sección 5](#5-errores-típicos-demostrables-con-curl).
+
 ## Índice
 
-1. [Autenticación](#1-autenticación)
+1. [Convenciones y credenciales demo](#1-convenciones-y-credenciales-demo)
 2. [Formato de respuesta de error](#2-formato-de-respuesta-de-error)
 3. [Códigos de negocio](#3-códigos-de-negocio)
-4. [Endpoints implementados](#4-endpoints-implementados)
+4. [Endpoints documentados](#4-endpoints-documentados)
    - [4.1 Auth](#41-auth)
    - [4.2 Users](#42-users)
    - [4.3 Products (catálogo público)](#43-products-catálogo-público)
@@ -18,49 +25,60 @@
    - [4.6 Checkout (compra con pago simulado)](#46-checkout-compra-con-pago-simulado)
    - [4.7 Orders (consultas del usuario)](#47-orders-consultas-del-usuario)
    - [4.8 Orders (gestión admin)](#48-orders-gestión-admin)
-5. [Referencias](#5-referencias)
+   - [4.9 Swagger UI (SpringDoc)](#49-swagger-ui-springdoc)
+ 5. [Errores típicos demostrables con `curl`](#5-errores-típicos-demostrables-con-curl)
+6. [Referencias](#6-referencias)
 
 ---
 
-## 1. Autenticación
+## 1. Convenciones y credenciales demo
 
-| Endpoint | Método | Acceso | Descripción |
-|----------|--------|--------|-------------|
-| `POST /api/auth/register` | POST | Público | Crea una cuenta (rol `USER` siempre) |
-| `POST /api/auth/login` | POST | Público | Emite el JWT (2 h de vida) + perfil del usuario |
-| `GET /api/users/me` | GET | JWT | Perfil del usuario autenticado |
-| `PUT /api/users/me` | PUT | JWT | Actualiza nombre, email y/o contraseña |
+**Credenciales del seed** ([`V2__seed.sql`](../backend/src/main/resources/db/migration/V2__seed.sql)):
 
-Flujo típico:
+| Rol | Email | Contraseña |
+|-----|-------|------------|
+| `ADMIN` | `admin@demo.com` | `Admin123!` |
+| `USER` | `user@demo.com` | `User123!` |
 
-```bash
-# 1) Iniciar sesión (credenciales del seed V2__seed.sql)
-curl -X POST http://localhost:8080/api/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email": "user@demo.com", "password": "User123!"}'
+**Productos del seed** (UUIDs determinísticos; el `...0105` es el de **stock bajo**,
+stock = 2, pensado para demostrar `INSUFFICIENT_STOCK`):
 
-# 2) Usar el token en cada petición autenticada
-curl http://localhost:8080/api/users/me \
-  -H "Authorization: Bearer <token>"
-```
+| UUID | Nombre | Precio (COP) | Stock |
+|------|--------|--------------|-------|
+| `00000000-0000-0000-0000-000000000101` | Laptop ProBook 14" | 2599900.00 | 10 |
+| `00000000-0000-0000-0000-000000000102` | Teclado Mecanico RGB | 189900.00 | 25 |
+| `00000000-0000-0000-0000-000000000103` | Mouse Gamer 12000 DPI | 99900.00 | 40 |
+| `00000000-0000-0000-0000-000000000104` | Monitor 27" 144Hz | 749900.00 | 8 |
+| `00000000-0000-0000-0000-000000000105` | Cable USB-C 100W | 29900.00 | **2** |
+| `00000000-0000-0000-0000-000000000106` | Audifonos Bluetooth 5.3 | 149900.00 | 15 |
+| `00000000-0000-0000-0000-000000000107` | SSD NVMe 1TB | 259900.00 | 20 |
+| `00000000-0000-0000-0000-000000000108` | Hub USB 3.0 4 Puertos | 49900.00 | 5 |
 
-Comportamiento del filtro JWT
-([`JwtAuthFilter.java`](../backend/src/main/java/com/ingesoft/shop/security/JwtAuthFilter.java)):
+**Convenciones de los ejemplos:**
 
-- **Token ausente** → la petición continúa sin autenticar; si la ruta es
-  protegida, Spring Security responde **401** `UNAUTHORIZED`.
-- **Token inválido o expirado** → se omite la autenticación (log en `DEBUG`);
-  misma respuesta **401** sobre ruta protegida.
-- **Token válido pero usuario inactivo** (`active = false`, soft delete) →
-  se rechaza la autenticación → **401** sobre ruta protegida.
+- Los ejemplos asumen que ya obtuviste un token. Para no repetir el login en cada bloque,
+  los ejemplos usan las variables `<token-user>` (rol `USER`) y `<token-admin>` (rol
+  `ADMIN`), que se obtienen así (en PowerShell o WSL; en `cmd.exe` adapta el `set`):
 
-Errores de seguridad:
+  ```bash
+  # Token de usuario demo
+  TOKEN_USER=$(curl -s -X POST http://localhost:8080/api/auth/login \
+    -H "Content-Type: application/json" \
+    -d '{"email": "user@demo.com", "password": "User123!"}' \
+    | python -c "import sys, json; print(json.load(sys.stdin)['token'])")
 
-| Situación | HTTP | `code` |
-|-----------|------|--------|
-| Login con email/contraseña incorrectos | 401 | `INVALID_CREDENTIALS` |
-| Token ausente, inválido o expirado en ruta protegida | 401 | `UNAUTHORIZED` |
-| Usuario autenticado sin el rol requerido (p. ej. `USER` sobre `/api/admin/**`) | 403 | `FORBIDDEN` |
+  # Token de administrador
+  TOKEN_ADMIN=$(curl -s -X POST http://localhost:8080/api/auth/login \
+    -H "Content-Type: application/json" \
+    -d '{"email": "admin@demo.com", "password": "Admin123!"}' \
+    | python -c "import sys, json; print(json.load(sys.stdin)['token'])")
+  ```
+
+- Los `id` de ítems de carrito (`<cartItemId>`) y de órdenes (`<orderId>`) se toman de
+  las propias respuestas de `POST /api/cart/items` y `POST /api/checkout`.
+- En **Windows (`cmd.exe`)**: reemplaza las comillas simples por dobles (escapando las
+  internas), y usa `set TOKEN_USER=...` para las variables; el JSON debe ir en un solo
+  `-d "{...}"`.
 
 ---
 
@@ -75,7 +93,7 @@ generado por [`GlobalExceptionHandler.java`](../backend/src/main/java/com/ingeso
   "status": 409,
   "code": "EMAIL_ALREADY_REGISTERED",
   "message": "El email user@demo.com ya está registrado",
-  "timestamp": "2026-11-12T03:00:00Z"
+  "timestamp": "2026-11-22T03:00:00Z"
 }
 ```
 
@@ -95,9 +113,9 @@ generado por [`GlobalExceptionHandler.java`](../backend/src/main/java/com/ingeso
 | 401 | No autenticado | Login con credenciales inválidas; token ausente/inválido/expirado en ruta protegida |
 | 402 | Pago requerido | La pasarela simulada rechazó el pago (`PAYMENT_DECLINED`); la orden queda `PENDING` para reintentar |
 | 403 | No autorizado | Usuario sin el rol requerido sobre la ruta |
-| 404 | No encontrado | Ruta inexistente; usuario inexistente; producto inexistente en catálogo o en el carrito durante el checkout |
+| 404 | No encontrado | Ruta inexistente; usuario inexistente; producto inexistente o desactivado; ítem de carrito ajeno; orden inexistente o ajena |
 | 405 | Método no permitido | Método HTTP no soportado sobre la ruta |
-| 409 | Conflicto | Email ya registrado (registro o cambio de perfil); carrito vacío al hacer checkout; stock insuficiente en carrito o checkout; transición de estado de orden no permitida |
+| 409 | Conflicto | Email ya registrado; carrito vacío al hacer checkout; stock insuficiente; transición de estado de orden no permitida |
 | 500 | Error interno | Fallo no controlado (última línea de defensa; el detalle solo va a log) |
 
 ---
@@ -116,7 +134,7 @@ Estado actual de [`ErrorCode.java`](../backend/src/main/java/com/ingesoft/shop/e
 | `PAYMENT_DECLINED` | 402 | La pasarela simulada rechazó el pago; la orden queda `PENDING` (reintentable) |
 | `UNAUTHORIZED` | 401 | Token ausente, inválido o expirado |
 | `FORBIDDEN` | 403 | Rol insuficiente para la ruta |
-| `VALIDATION_ERROR` | 400 | Validación de entrada fallida (bean validation / parámetros) |
+| `VALIDATION_ERROR` | 400 | Validación de entrada fallida (Bean Validation / parámetros) |
 | `NOT_FOUND` | 404 | Ruta no existe, usuario inexistente, o ítem de carrito inexistente / ajeno al carrito del usuario |
 | `ORDER_NOT_FOUND` | 404 | Orden inexistente, o orden ajena al usuario del token al consultar sus órdenes (se responde igual para no revelar existencias) |
 | `ORDER_STATUS_INVALID` | 409 | Transición de estado de orden no permitida por la máquina de estados (ver [4.8](#48-orders-gestión-admin)) |
@@ -125,7 +143,7 @@ Estado actual de [`ErrorCode.java`](../backend/src/main/java/com/ingesoft/shop/e
 
 ---
 
-## 4. Endpoints implementados
+## 4. Endpoints documentados
 
 ### 4.1 Auth
 
@@ -136,7 +154,7 @@ Controller: [`AuthController.java`](../backend/src/main/java/com/ingesoft/shop/c
 
 Crea un usuario con rol `USER` (el rol nunca se acepta del cliente, R1). La
 contraseña se almacena como hash BCrypt; nunca viaja ni se expone en
-respuestas.
+respuestas. **Acceso: público.**
 
 **Body** ([`RegisterRequest`](../backend/src/main/java/com/ingesoft/shop/dto/request/RegisterRequest.java)):
 
@@ -146,12 +164,14 @@ respuestas.
 | `email` | string | requerido, formato de email válido, único |
 | `password` | string | requerido, 8–72 caracteres |
 
-```json
-{
-  "name": "Ana Pérez",
-  "email": "ana@correo.com",
-  "password": "MiClave123!"
-}
+```bash
+curl -X POST http://localhost:8080/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Ana Pérez",
+    "email": "ana@correo.com",
+    "password": "MiClave123!"
+  }'
 ```
 
 **Respuesta `201 Created`** ([`UserResponse`](../backend/src/main/java/com/ingesoft/shop/dto/response/UserResponse.java)):
@@ -162,11 +182,12 @@ respuestas.
   "name": "Ana Pérez",
   "email": "ana@correo.com",
   "role": "USER",
-  "createdAt": "2026-11-12T03:00:00Z"
+  "createdAt": "2026-11-22T03:00:00Z"
 }
 ```
 
 **Errores:** `400 VALIDATION_ERROR` · `409 EMAIL_ALREADY_REGISTERED`
+(ejemplo real en [5.2](#52-409-email-ya-registrado)).
 
 ---
 
@@ -174,7 +195,7 @@ respuestas.
 
 Verifica credenciales y emite el token JWT (HS256, expiración 2 h por
 defecto). El mismo `401 INVALID_CREDENTIALS` se usa para email inexistente y
-contraseña incorrecta (no se revela cuál falló).
+contraseña incorrecta (no se revela cuál falló). **Acceso: público.**
 
 **Body** ([`LoginRequest`](../backend/src/main/java/com/ingesoft/shop/dto/request/LoginRequest.java)):
 
@@ -183,24 +204,23 @@ contraseña incorrecta (no se revela cuál falló).
 | `email` | string | requerido, formato de email válido |
 | `password` | string | requerido |
 
-```json
-{
-  "email": "user@demo.com",
-  "password": "User123!"
-}
+```bash
+curl -X POST http://localhost:8080/api/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email": "user@demo.com", "password": "User123!"}'
 ```
 
 **Respuesta `200 OK`** ([`LoginResponse`](../backend/src/main/java/com/ingesoft/shop/dto/response/LoginResponse.java)):
 
 ```json
 {
-  "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyQGRlbW8uY29tIiwicm9sZSI6IlVTRVIiLCJpYXQiOjE3NTc2ODAwMDAsImV4cCI6MTc1NzY4NzIwMH0.firma",
+  "token": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ1c2VyQGRlbW8uY29tIiwicm9sZSI6IlVTRVIiLCJpYXQiOjE3NTU3MDAwMDAsImV4cCI6MTc1NTcwNzIwMH0.firma",
   "user": {
     "id": "00000000-0000-0000-0000-000000000002",
     "name": "Usuario Demo",
     "email": "user@demo.com",
     "role": "USER",
-    "createdAt": "2026-11-12T02:00:00Z"
+    "createdAt": "2026-11-22T02:00:00Z"
   }
 }
 ```
@@ -219,7 +239,22 @@ del email contenido en el token JWT (`Authentication.getName()`).
 
 **Autenticación:** JWT · **Body:** —
 
+```bash
+curl http://localhost:8080/api/users/me \
+  -H "Authorization: Bearer <token-user>"
+```
+
 **Respuesta `200 OK`:** mismo `UserResponse` del registro.
+
+```json
+{
+  "id": "00000000-0000-0000-0000-000000000002",
+  "name": "Usuario Demo",
+  "email": "user@demo.com",
+  "role": "USER",
+  "createdAt": "2026-11-22T02:00:00Z"
+}
+```
 
 **Errores:** `401 UNAUTHORIZED` (sin token o inválido) · `404 NOT_FOUND`
 (token válido pero el usuario ya no existe)
@@ -238,12 +273,15 @@ del email contenido en el token JWT (`Authentication.getName()`).
 | `email` | string | requerido, formato válido, único entre usuarios |
 | `password` | string | **opcional** (si se envía, 8–72 caracteres). `null` o en blanco = no se cambia la contraseña |
 
-```json
-{
-  "name": "Ana Pérez Roldán",
-  "email": "ana.perez@correo.com",
-  "password": null
-}
+```bash
+curl -X PUT http://localhost:8080/api/users/me \
+  -H "Authorization: Bearer <token-user>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Usuario Demo",
+    "email": "user@demo.com",
+    "password": null
+  }'
 ```
 
 **Respuesta `200 OK`:** `UserResponse` con los datos actualizados.
@@ -273,6 +311,14 @@ Controller: [`ProductController.java`](../backend/src/main/java/com/ingesoft/sho
 | `search` | string | — | Búsqueda parcial en `name` (insensible a mayúsculas/minúsculas) |
 | `sort` | string | `name` | Formato `campo` o `campo,desc`. Campos válidos: `name`, `price`, `stock`, `updatedAt` |
 
+```bash
+# Todo el catálogo, primera página
+curl "http://localhost:8080/api/products?page=0&size=10"
+
+# Buscar "cable" y ordenar por precio descendente
+curl "http://localhost:8080/api/products?search=cable&sort=price,desc"
+```
+
 **Respuesta `200 OK`:** `Page<ProductResponse>` (formato de paginación
 estándar de Spring Data):
 
@@ -287,7 +333,7 @@ estándar de Spring Data):
       "stock": 10,
       "imageUrl": "/img/productos/laptop-probook.webp",
       "available": true,
-      "updatedAt": "2026-11-12T02:00:00Z"
+      "updatedAt": "2026-11-22T02:00:00Z"
     }
   ],
   "totalElements": 8,
@@ -296,7 +342,7 @@ estándar de Spring Data):
   "number": 0,
   "first": true,
   "last": true,
-  "numberOfElements": 1,
+  "numberOfElements": 8,
   "empty": false
 }
 ```
@@ -309,12 +355,29 @@ estándar de Spring Data):
 
 **Parámetros de ruta:** `id` (UUID)
 
+```bash
+curl http://localhost:8080/api/products/00000000-0000-0000-0000-000000000105
+```
+
 **Respuesta `200 OK`:** `ProductResponse` (misma forma que un elemento de
 `content` del listado).
 
-**Errores:** `404 PRODUCT_NOT_FOUND` (el producto no existe **o** está
-desactivado: para el público ambos casos se responden igual, para no revelar
-la existencia de productos desactivados)
+```json
+{
+  "id": "00000000-0000-0000-0000-000000000105",
+  "name": "Cable USB-C 100W",
+  "description": "Cable USB-C trenzado con carga de 100W y transferencia de datos a 10 Gbps. Longitud 2 m. (STOCK BAJO: demo de INSUFFICIENT_STOCK)",
+  "price": 29900.00,
+  "stock": 2,
+  "imageUrl": "/img/productos/cable-usbc.webp",
+  "available": true,
+  "updatedAt": "2026-11-22T02:00:00Z"
+}
+```
+
+**Errores:** `400 VALIDATION_ERROR` (`id` no es un UUID) · `404 PRODUCT_NOT_FOUND`
+(el producto no existe **o** está desactivado: para el público ambos casos se
+responden igual, para no revelar la existencia de productos desactivados)
 
 ---
 
@@ -326,6 +389,7 @@ Controller: [`AdminProductController.java`](../backend/src/main/java/com/ingesof
 **Autenticación: JWT + rol `ADMIN`** (`@PreAuthorize("hasRole('ADMIN')")` a
 nivel de clase). Un usuario autenticado con rol `USER` recibe
 `403 FORBIDDEN`; sin token (o inválido), `401 UNAUTHORIZED`.
+(Ejemplo real del `403` en [5.4](#54-403-rol-insuficiente).)
 
 #### `GET /api/admin/products` — listado completo
 
@@ -335,6 +399,16 @@ Mismos parámetros de consulta que `GET /api/products` (`page`, `size`,
 - **Incluye productos desactivados** (`available = false`): el admin ve el
   inventario completo.
 - El campo de orden acepta además `available`.
+
+```bash
+# Todo el inventario (activos y desactivados)
+curl "http://localhost:8080/api/admin/products?page=0&size=10" \
+  -H "Authorization: Bearer <token-admin>"
+
+# Solo los desactivados, por nombre
+curl "http://localhost:8080/api/admin/products?search=webcam" \
+  -H "Authorization: Bearer <token-admin>"
+```
 
 **Respuesta `200 OK`:** `Page<ProductResponse>`.
 
@@ -354,14 +428,17 @@ Mismos parámetros de consulta que `GET /api/products` (`page`, `size`,
 | `stock` | int | requerido, ≥ 0 |
 | `imageUrl` | string | **opcional**, máx. 500 caracteres |
 
-```json
-{
-  "name": "Webcam Full HD",
-  "description": "Webcam 1080p con microfono integrado y enfoque automatico.",
-  "price": 189900.00,
-  "stock": 15,
-  "imageUrl": "/img/productos/webcam-fhd.webp"
-}
+```bash
+curl -X POST http://localhost:8080/api/admin/products \
+  -H "Authorization: Bearer <token-admin>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Webcam Full HD",
+    "description": "Webcam 1080p con microfono integrado y enfoque automatico.",
+    "price": 189900.00,
+    "stock": 15,
+    "imageUrl": "/img/productos/webcam-fhd.webp"
+  }'
 ```
 
 **Respuesta `201 Created`:** `ProductResponse` (el producto nace con
@@ -374,8 +451,22 @@ Mismos parámetros de consulta que `GET /api/products` (`page`, `size`,
 #### `PUT /api/admin/products/{id}` — actualizar producto
 
 **Body:** mismo `ProductRequest` (actualización total de los campos
-editables; `id` y `available` no se aceptan en el body — ver
-[`DELETE /api/admin/products/{id}`](#delete-apiprodproductsid--desactivar-soft-delete)).
+editables; `id` y `available` no se aceptan en el body — el cambio de
+disponibilidad se hace con
+[`DELETE /api/admin/products/{id}`](#delete-apiadminproductsid--desactivar-soft-delete)).
+
+```bash
+curl -X PUT http://localhost:8080/api/admin/products/00000000-0000-0000-0000-000000000105 \
+  -H "Authorization: Bearer <token-admin>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Cable USB-C 100W",
+    "description": "Cable USB-C trenzado con carga de 100W y transferencia de datos a 10 Gbps. Longitud 2 m.",
+    "price": 32900.00,
+    "stock": 2,
+    "imageUrl": "/img/productos/cable-usbc.webp"
+  }'
+```
 
 **Respuesta `200 OK`:** `ProductResponse` actualizado.
 
@@ -387,7 +478,13 @@ editables; `id` y `available` no se aceptan en el body — ver
 #### `DELETE /api/admin/products/{id}` — desactivar (soft delete)
 
 **No** elimina la fila: marca `available = false` para preservar la
-trazabilidad de órdenes futuras que referencian el producto (ver ADR-008).
+trazabilidad de órdenes futuras que referencian el producto
+(ADR-013 en [`decisiones-adr.md`](decisiones-adr.md)).
+
+```bash
+curl -X DELETE http://localhost:8080/api/admin/products/00000000-0000-0000-0000-000000000108 \
+  -H "Authorization: Bearer <token-admin>"
+```
 
 **Respuesta `200 OK`:** `ProductResponse` con `available = false`.
 
@@ -403,8 +500,11 @@ trazabilidad de órdenes futuras que referencian el producto (ver ADR-008).
 |-------|------|---------------|
 | `stock` | int | requerido, ≥ 0. Es el valor **absoluto** de stock (no un delta) |
 
-```json
-{ "stock": 7 }
+```bash
+curl -X PATCH http://localhost:8080/api/admin/products/00000000-0000-0000-0000-000000000105/stock \
+  -H "Authorization: Bearer <token-admin>" \
+  -H "Content-Type: application/json" \
+  -d '{ "stock": 7 }'
 ```
 
 **Respuesta `200 OK`:** `ProductResponse` con el stock actualizado.
@@ -433,14 +533,19 @@ usuario del token.
 - La **cantidad se acumula**: agregar un producto que ya está en el carrito
   suma las cantidades en lugar de duplicar el ítem (restricción única
   `cart_id + product_id`).
-- El precio del ítem se captura del producto **en el momento de agregarlo**
-  (ADR-009); el stock se re-valida al procesar el checkout
+- El precio del ítem se captura del producto **en el momento de agregarlo**;
+  el stock se re-valida al procesar el checkout
   ([4.6](#46-checkout-compra-con-pago-simulado)).
 - **Aislamiento de ítems:** `PATCH`/`DELETE` verifican que el ítem pertenece
   al carrito del usuario del token; si no, se responde `404 NOT_FOUND` (no se
   revela la existencia de ítems ajenos).
 
 #### `GET /api/cart` — ver el carrito
+
+```bash
+curl http://localhost:8080/api/cart \
+  -H "Authorization: Bearer <token-user>"
+```
 
 **Respuesta `200 OK`:** `CartResponse`
 
@@ -453,12 +558,12 @@ usuario del token.
       "productId": "00000000-0000-0000-0000-000000000105",
       "productName": "Cable USB-C 100W",
       "imageUrl": "/img/productos/cable-usbc.webp",
-      "unitPrice": 129900.00,
+      "unitPrice": 29900.00,
       "quantity": 2,
-      "lineTotal": 259800.00
+      "lineTotal": 59800.00
     }
   ],
-  "subtotal": 259800.00
+  "subtotal": 59800.00
 }
 ```
 
@@ -477,18 +582,20 @@ usuario del token.
 
 ```bash
 curl -X POST http://localhost:8080/api/cart/items \
-  -H "Authorization: Bearer <token>" \
+  -H "Authorization: Bearer <token-user>" \
   -H "Content-Type: application/json" \
   -d '{"productId": "00000000-0000-0000-0000-000000000105", "quantity": 2}'
 ```
 
-**Respuesta `201 Created`:** `CartResponse` completo con la cantidad
-acumulada si el producto ya estaba en el carrito.
+**Respuesta `200 OK`:** `CartResponse` completo con la cantidad
+acumulada si el producto ya estaba en el carrito. (El controlador no declara
+un estado propio; la respuesta es `200`.)
 
 **Errores:** `400 VALIDATION_ERROR` · `401 UNAUTHORIZED` ·
 `404 PRODUCT_NOT_FOUND` (producto inexistente **o** desactivado) ·
 `409 INSUFFICIENT_STOCK` (el stock disponible del producto es menor que la
-cantidad solicitada, o no alcanza para la cantidad acumulada)
+cantidad acumulada) (ejemplo real en
+[5.1](#51-409-stock-insuficiente)).
 
 ---
 
@@ -502,6 +609,13 @@ cantidad solicitada, o no alcanza para la cantidad acumulada)
 |-------|------|---------------|
 | `quantity` | int | requerido, mayor que 0. Es el valor **absoluto** (no un delta) |
 
+```bash
+curl -X PATCH http://localhost:8080/api/cart/items/<cartItemId> \
+  -H "Authorization: Bearer <token-user>" \
+  -H "Content-Type: application/json" \
+  -d '{ "quantity": 1 }'
+```
+
 **Respuesta `200 OK`:** `CartResponse` con la cantidad actualizada.
 
 **Errores:** `400 VALIDATION_ERROR` · `401 UNAUTHORIZED` ·
@@ -513,6 +627,11 @@ cantidad solicitada, o no alcanza para la cantidad acumulada)
 #### `DELETE /api/cart/items/{itemId}` — eliminar un ítem
 
 **Parámetros de ruta:** `itemId` (UUID)
+
+```bash
+curl -X DELETE http://localhost:8080/api/cart/items/<cartItemId> \
+  -H "Authorization: Bearer <token-user>"
+```
 
 **Respuesta `200 OK`:** `CartResponse` con el ítem eliminado.
 
@@ -542,7 +661,7 @@ usuario del token (el email viaja por el `Authentication`, nunca por el body).
   persiste nada.
 - **Bloqueo pesimista:** los ítems del carrito y cada producto se bloquean
   con `SELECT ... FOR UPDATE` (`PESSIMISTIC_WRITE`) para impedir la sobreventa
-  ante peticiones concurrentes (ver ADR-015).
+  ante peticiones concurrentes (ADR-015).
 - **Total:** `subtotal` (suma de `unitPrice × quantity`) + envío fijo
   (`checkout.shipping-fee`, por defecto `5000.00` COP) → `total`.
 - **Pago simulado:** cualquier tarjeta se acepta **salvo** la cuyos dígitos
@@ -550,9 +669,8 @@ usuario del token (el email viaja por el `Authentication`, nunca por el body).
   pago confirmado genera un `transactionId` `SIM-<uuid>`; todo intento se
   persiste en la tabla `payments` (confirmado o rechazado).
 - **Rechazo del pago:** la orden se persiste con estado `PENDING`, el pago
-  como `FAILED`, y la petición responde `402 PAYMENT_DECLINED`. La orden
-  `PENDING` puede reintentarse más adelante con su `orderNumber` (el módulo
-  de reintentos aún no está implementado).
+  como `FAILED`, y la petición responde `402 PAYMENT_DECLINED` con el
+  `orderNumber` en el `message`.
 - **Confirmación:** se descuenta el stock de cada producto, la orden pasa a
   `PAID` y el carrito se vacía. Los ítems de la orden son una copia
   **desnormalizada** (`productName` y `unitPrice` inmutables en
@@ -566,7 +684,7 @@ usuario del token (el email viaja por el `Authentication`, nunca por el body).
 | Campo | Tipo | Restricciones |
 |-------|------|---------------|
 | `shippingAddress` | string | requerido, máx. 255 caracteres |
-| `payment` | [`PaymentData`](#paymentdata) | requerido, validado en cascada (`@Valid`) |
+| `payment` | `PaymentData` | requerido, validado en cascada (`@Valid`) |
 
 **`payment`** ([`PaymentData`](../backend/src/main/java/com/ingesoft/shop/dto/request/PaymentData.java)):
 
@@ -576,15 +694,16 @@ usuario del token (el email viaja por el `Authentication`, nunca por el body).
 | `cardNumber` | string | requerido, máx. 25 caracteres. En el proveedor simulado, los dígitos que terminen en `0002` se rechazan |
 | `cardholderName` | string | **opcional**, máx. 100 caracteres |
 
-```json
-{
-  "shippingAddress": "Calle 45 # 12-30, Bogotá",
-  "payment": {
-    "method": "card",
-    "cardNumber": "4242 4242 4242 4242",
-    "cardholderName": "Usuario Demo"
-  }
-}
+**Exito** (tarjeta válida; después de haber agregado ítems al carrito):
+
+```bash
+curl -X POST http://localhost:8080/api/checkout \
+  -H "Authorization: Bearer <token-user>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "shippingAddress": "Calle 45 # 12-30, Bogotá",
+    "payment": { "method": "card", "cardNumber": "4242424242424242" }
+  }'
 ```
 
 **Respuesta `201 Created`** ([`OrderResponse`](../backend/src/main/java/com/ingesoft/shop/dto/response/OrderResponse.java)):
@@ -594,53 +713,52 @@ usuario del token (el email viaja por el `Authentication`, nunca por el body).
   "id": "b7e2c4d8-9a1f-4c3e-8d2b-5f6a7c8d9e0f",
   "orderNumber": "ORD-1A2B3C4D",
   "status": "PAID",
-  "subtotal": 259800.00,
+  "subtotal": 59800.00,
   "shipping": 5000.00,
-  "total": 264800.00,
+  "total": 64800.00,
   "shippingAddress": "Calle 45 # 12-30, Bogotá",
-  "createdAt": "2026-11-12T03:00:00Z",
+  "createdAt": "2026-11-22T03:00:00Z",
   "items": [
     {
       "productId": "00000000-0000-0000-0000-000000000105",
       "productName": "Cable USB-C 100W",
-      "unitPrice": 129900.00,
+      "unitPrice": 29900.00,
       "quantity": 2,
-      "lineTotal": 259800.00
+      "lineTotal": 59800.00
     }
   ]
 }
 ```
 
-Ejemplo (después de agregar ítems al carrito con `POST /api/cart/items`):
+**Rechazo** (tarjeta cuyos dígitos terminen en `0002`):
 
 ```bash
 curl -X POST http://localhost:8080/api/checkout \
-  -H "Authorization: Bearer <token>" \
+  -H "Authorization: Bearer <token-user>" \
   -H "Content-Type: application/json" \
   -d '{
     "shippingAddress": "Calle 45 # 12-30, Bogotá",
-    "payment": { "method": "card", "cardNumber": "4242 4242 4242 4242" }
+    "payment": { "method": "card", "cardNumber": "4000000000000002" }
   }'
 ```
 
-Simulación de rechazo (tarjeta cuyos dígitos terminen en `0002`):
+**Respuesta `402 PAYMENT_DECLINED`** (la orden `PENDING` y el pago `FAILED`
+quedan persistidos; el `message` incluye el `orderNumber` para el reintento):
 
-```bash
-curl -X POST http://localhost:8080/api/checkout \
-  -H "Authorization: Bearer <token>" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "shippingAddress": "Calle 45 # 12-30, Bogotá",
-    "payment": { "method": "card", "cardNumber": "4000 0000 0000 0002" }
-  }'
+```json
+{
+  "status": 402,
+  "code": "PAYMENT_DECLINED",
+  "message": "El pago fue rechazado. La orden ORD-1A2B3C4D quedó PENDING; reintente el pago con ese número de orden.",
+  "timestamp": "2026-11-22T03:00:00Z"
+}
 ```
 
 **Errores:** `400 VALIDATION_ERROR` · `401 UNAUTHORIZED` ·
 `404 PRODUCT_NOT_FOUND` (un producto del carrito fue eliminado) ·
 `409 CART_EMPTY` (el carrito no tiene ítems) · `409 INSUFFICIENT_STOCK`
 (entró una compra concurrente y el stock ya no alcanza) ·
-`402 PAYMENT_DECLINED` (la pasarela simulada rechazó la tarjeta; la orden
-queda `PENDING` y su `orderNumber` viene en el `message` del error)
+`402 PAYMENT_DECLINED` (la pasarela simulada rechazó la tarjeta)
 
 ---
 
@@ -673,6 +791,11 @@ URL ni por el body.
 | `page` | int | `0` | Índice de página (0-based) |
 | `size` | int | `10` | Elementos por página |
 
+```bash
+curl "http://localhost:8080/api/orders/mine?page=0&size=10" \
+  -H "Authorization: Bearer <token-user>"
+```
+
 **Respuesta `200 OK`:** `Page<OrderResponse>` (misma forma que
 [`OrderResponse`](../backend/src/main/java/com/ingesoft/shop/dto/response/OrderResponse.java)
 del checkout; sin el campo `payment`):
@@ -684,18 +807,18 @@ del checkout; sin el campo `payment`):
       "id": "b7e2c4d8-9a1f-4c3e-8d2b-5f6a7c8d9e0f",
       "orderNumber": "ORD-1A2B3C4D",
       "status": "PAID",
-      "subtotal": 259800.00,
+      "subtotal": 59800.00,
       "shipping": 5000.00,
-      "total": 264800.00,
+      "total": 64800.00,
       "shippingAddress": "Calle 45 # 12-30, Bogotá",
-      "createdAt": "2026-11-12T03:00:00Z",
+      "createdAt": "2026-11-22T03:00:00Z",
       "items": [
         {
           "productId": "00000000-0000-0000-0000-000000000105",
           "productName": "Cable USB-C 100W",
-          "unitPrice": 129900.00,
+          "unitPrice": 29900.00,
           "quantity": 2,
-          "lineTotal": 259800.00
+          "lineTotal": 59800.00
         }
       ]
     }
@@ -720,6 +843,11 @@ del checkout; sin el campo `payment`):
 
 **Parámetros de ruta:** `id` (UUID de la orden)
 
+```bash
+curl http://localhost:8080/api/orders/mine/<orderId> \
+  -H "Authorization: Bearer <token-user>"
+```
+
 **Respuesta `200 OK`:** `OrderDetailResponse`
 
 ```json
@@ -727,18 +855,18 @@ del checkout; sin el campo `payment`):
   "id": "b7e2c4d8-9a1f-4c3e-8d2b-5f6a7c8d9e0f",
   "orderNumber": "ORD-1A2B3C4D",
   "status": "PAID",
-  "subtotal": 259800.00,
+  "subtotal": 59800.00,
   "shipping": 5000.00,
-  "total": 264800.00,
+  "total": 64800.00,
   "shippingAddress": "Calle 45 # 12-30, Bogotá",
-  "createdAt": "2026-11-12T03:00:00Z",
+  "createdAt": "2026-11-22T03:00:00Z",
   "items": [
     {
       "productId": "00000000-0000-0000-0000-000000000105",
       "productName": "Cable USB-C 100W",
-      "unitPrice": 129900.00,
+      "unitPrice": 29900.00,
       "quantity": 2,
-      "lineTotal": 259800.00
+      "lineTotal": 59800.00
     }
   ],
   "payment": {
@@ -746,7 +874,7 @@ del checkout; sin el campo `payment`):
     "method": "card",
     "transactionId": "SIM-7c9e4a1d-2b3f-4e5a-9c6d-8e7f0a1b2c3d",
     "failureReason": null,
-    "processedAt": "2026-11-12T03:00:00Z"
+    "processedAt": "2026-11-22T03:00:00Z"
   }
 }
 ```
@@ -764,7 +892,8 @@ Controller: [`AdminOrderController.java`](../backend/src/main/java/com/ingesoft/
 
 **Autenticación: JWT + rol `ADMIN`** (`@PreAuthorize("hasRole('ADMIN')")` a
 nivel de clase). Un usuario autenticado con rol `USER` recibe
-`403 FORBIDDEN`; sin token (o inválido), `401 UNAUTHORIZED`.
+`403 FORBIDDEN` (ejemplo real en [5.4](#54-403-rol-insuficiente)); sin token
+(o inválido), `401 UNAUTHORIZED`.
 
 **Comportamiento general:**
 
@@ -798,6 +927,16 @@ nivel de clase). Un usuario autenticado con rol `USER` recibe
 | `size` | int | `10` | Elementos por página |
 | `status` | enum | — | Filtro opcional por [`OrderStatus`](../backend/src/main/java/com/ingesoft/shop/enums/OrderStatus.java): `PENDING`, `PAID`, `SHIPPED`, `DELIVERED`, `CANCELLED`. Sin el parámetro devuelve todas |
 
+```bash
+# Todas las órdenes
+curl "http://localhost:8080/api/admin/orders?page=0&size=10" \
+  -H "Authorization: Bearer <token-admin>"
+
+# Solo las pendientes de pago
+curl "http://localhost:8080/api/admin/orders?status=PENDING" \
+  -H "Authorization: Bearer <token-admin>"
+```
+
 **Respuesta `200 OK`:** `Page<OrderResponse>` (misma forma que
 [4.7](#47-orders-consultas-del-usuario)), ordenado por `createdAt` descendente.
 
@@ -809,6 +948,11 @@ inválido) · `401 UNAUTHORIZED` · `403 FORBIDDEN`
 #### `GET /api/admin/orders/{id}` — detalle de una orden
 
 **Parámetros de ruta:** `id` (UUID de la orden)
+
+```bash
+curl http://localhost:8080/api/admin/orders/<orderId> \
+  -H "Authorization: Bearer <token-admin>"
+```
 
 **Respuesta `200 OK`:** `OrderDetailResponse` (misma forma que
 [4.7](#get-apiordersmineid--detalle-de-una-orden-propia)).
@@ -827,15 +971,24 @@ inválido) · `401 UNAUTHORIZED` · `403 FORBIDDEN`
 |-------|------|---------------|
 | `status` | enum | requerido (`@NotNull`), uno de los valores de `OrderStatus` |
 
-```json
-{ "status": "SHIPPED" }
-```
-
 ```bash
-curl -X PATCH http://localhost:8080/api/admin/orders/<orderId> \
+# PAID -> SHIPPED
+curl -X PATCH http://localhost:8080/api/admin/orders/<orderId>/status \
   -H "Authorization: Bearer <token-admin>" \
   -H "Content-Type: application/json" \
   -d '{ "status": "SHIPPED" }'
+
+# SHIPPED -> DELIVERED
+curl -X PATCH http://localhost:8080/api/admin/orders/<orderId>/status \
+  -H "Authorization: Bearer <token-admin>" \
+  -H "Content-Type: application/json" \
+  -d '{ "status": "DELIVERED" }'
+
+# PAID -> CANCELLED (restaura el stock de cada ítem)
+curl -X PATCH http://localhost:8080/api/admin/orders/<orderId>/status \
+  -H "Authorization: Bearer <token-admin>" \
+  -H "Content-Type: application/json" \
+  -d '{ "status": "CANCELLED" }'
 ```
 
 **Respuesta `200 OK`:** `OrderDetailResponse` con el estado ya actualizado
@@ -849,8 +1002,183 @@ paso intentado, p. ej. `Transición de estado no permitida: DELIVERED → SHIPPE
 
 ---
 
-## 5. Referencias
+### 4.9 Swagger UI (SpringDoc)
 
-- Diseño completo y flujo de checkout: [`arquitectura.md`](arquitectura.md)
-- Decisiones relacionadas (JWT, pago simulado, soft delete): [`decisiones-adr.md`](decisiones-adr.md)
-- Credenciales demo del seed: [README.md](../README.md)
+**Autenticación: pública.** Documentación interactiva auto-generada de toda la
+API (tags por dominio, ejemplos de request/response):
+
+```bash
+# UI interactiva (se abre en el navegador)
+curl -I http://localhost:8080/swagger-ui.html
+
+# Especificación OpenAPI en JSON (útil para importar en Postman/Insomnia)
+curl http://localhost:8080/v3/api-docs
+```
+
+**Respuesta `200 OK`:** la UI en `<http://localhost:8080/swagger-ui.html>`;
+`/v3/api-docs` devuelve el documento OpenAPI 3.1 completo.
+
+> Para probar los endpoints con `Authorize` en la UI: usa el token obtenido en
+> `POST /api/auth/login`.
+
+---
+
+## 5. Errores típicos demostrables con `curl`
+
+Los tres errores que la prueba técnica pide demostrar, con el `curl` que los
+produce y la respuesta real del backend (formato
+[§2](#2-formato-de-respuesta-de-error)).
+
+### 5.1 409: stock insuficiente
+
+Con el seed, el **Cable USB-C 100W** (`...0105`) tiene stock **2**. Pedir 5
+unidades al carrito es un `409 INSUFFICIENT_STOCK` (y el mismo error sale en
+el checkout si la cantidad del carrito supera el stock):
+
+```bash
+curl -X POST http://localhost:8080/api/cart/items \
+  -H "Authorization: Bearer <token-user>" \
+  -H "Content-Type: application/json" \
+  -d '{"productId": "00000000-0000-0000-0000-000000000105", "quantity": 5}'
+```
+
+```json
+{
+  "status": 409,
+  "code": "INSUFFICIENT_STOCK",
+  "message": "El producto 'Cable USB-C 100W' no tiene suficiente stock (disponible: 2, solicitado: 5)",
+  "timestamp": "2026-11-22T03:00:00Z"
+}
+```
+
+Otras formas de provocar un `409`:
+
+- **Checkout con carrito vacío** → `409 CART_EMPTY` (después de vaciar el
+  carrito, `POST /api/checkout` responde *"El carrito está vacío; agregue
+  productos antes de finalizar la compra"*).
+- **Transición de estado inválida** → `409 ORDER_STATUS_INVALID`:
+
+  ```bash
+  # Sobre una orden DELIVERED, intentar volver a SHIPPED
+  curl -X PATCH http://localhost:8080/api/admin/orders/<orderId>/status \
+    -H "Authorization: Bearer <token-admin>" \
+    -H "Content-Type: application/json" \
+    -d '{ "status": "SHIPPED" }'
+  ```
+
+  ```json
+  {
+    "status": 409,
+    "code": "ORDER_STATUS_INVALID",
+    "message": "Transición de estado no permitida: DELIVERED → SHIPPED",
+    "timestamp": "2026-11-22T03:00:00Z"
+  }
+  ```
+
+### 5.2 409: email ya registrado
+
+Registrar con un email del seed (o repetido):
+
+```bash
+curl -X POST http://localhost:8080/api/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"name": "Replicado", "email": "user@demo.com", "password": "OtraClave123!"}'
+```
+
+```json
+{
+  "status": 409,
+  "code": "EMAIL_ALREADY_REGISTERED",
+  "message": "El email user@demo.com ya está registrado",
+  "timestamp": "2026-11-22T03:00:00Z"
+}
+```
+
+### 5.3 402: pago rechazado
+
+Tarjeta cuyos dígitos terminen en `0002` (regla del proveedor simulado,
+configurable en `checkout.card-declined-suffix`):
+
+```bash
+curl -X POST http://localhost:8080/api/checkout \
+  -H "Authorization: Bearer <token-user>" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "shippingAddress": "Calle 45 # 12-30, Bogotá",
+    "payment": { "method": "card", "cardNumber": "4000000000000002" }
+  }'
+```
+
+```json
+{
+  "status": 402,
+  "code": "PAYMENT_DECLINED",
+  "message": "El pago fue rechazado. La orden ORD-1A2B3C4D quedó PENDING; reintente el pago con ese número de orden.",
+  "timestamp": "2026-11-22T03:00:00Z"
+}
+```
+
+La orden `PENDING` y el pago `FAILED` quedan persistidos (verificables en
+`GET /api/admin/orders?status=PENDING` y en la tabla `payments`); el stock
+**no** se descuenta.
+
+### 5.4 403: rol insuficiente
+
+Con un token de rol `USER` sobre cualquier ruta `/api/admin/**`:
+
+```bash
+curl http://localhost:8080/api/admin/products \
+  -H "Authorization: Bearer <token-user>"
+```
+
+```json
+{
+  "status": 403,
+  "code": "FORBIDDEN",
+  "message": "Acceso denegado: falta un rol requerido.",
+  "timestamp": "2026-11-22T03:00:00Z"
+}
+```
+
+Y sin token (o con token inválido) sobre cualquier ruta protegida (`/api/users/**`,
+`/api/cart/**`, `/api/checkout`, `/api/orders/**`, `/api/admin/**`):
+
+```bash
+curl http://localhost:8080/api/cart
+```
+
+```json
+{
+  "status": 401,
+  "code": "UNAUTHORIZED",
+  "message": "No autenticado: falta el token JWT o no es valido.",
+  "timestamp": "2026-11-22T03:00:00Z"
+}
+```
+
+### 5.5 404: no encontrado (órdenes y productos)
+
+```bash
+# Orden inexistente o ajena al usuario (mismo mensaje para no revelar existencias)
+curl http://localhost:8080/api/orders/mine/00000000-0000-0000-0000-000000000001 \
+  -H "Authorization: Bearer <token-user>"
+```
+
+```json
+{
+  "status": 404,
+  "code": "ORDER_NOT_FOUND",
+  "message": "La orden 00000000-0000-0000-0000-000000000001 no existe o no es tuya",
+  "timestamp": "2026-11-22T03:00:00Z"
+}
+```
+
+---
+
+## 6. Referencias
+
+- Contrato de endpoints y diseño completo: [`arquitectura.md`](arquitectura.md) §5
+- Flujo transaccional del checkout: [`arquitectura.md`](arquitectura.md) §6
+- Decisiones relacionadas (JWT, pago simulado, soft delete, carrito): [`decisiones-adr.md`](decisiones-adr.md)
+- Documentación interactiva: Swagger UI en <http://localhost:8080/swagger-ui.html>
+- Credenciales demo del seed: [`V2__seed.sql`](../backend/src/main/resources/db/migration/V2__seed.sql)
