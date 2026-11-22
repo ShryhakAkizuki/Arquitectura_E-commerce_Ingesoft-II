@@ -16,8 +16,6 @@ import com.ingesoft.shop.enums.OrderStatus;
 public interface IOrderAdminService {
 
     Page<OrderResponse> list(OrderStatus status, int page, int size);
-
     OrderDetailResponse detail(UUID id);
-
     OrderDetailResponse updateStatus(UUID id, UpdateOrderStatusRequest request);
 }

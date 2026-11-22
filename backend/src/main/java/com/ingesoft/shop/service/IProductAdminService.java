@@ -14,12 +14,8 @@ import com.ingesoft.shop.dto.response.ProductResponse;
 public interface IProductAdminService {
 
     Page<ProductResponse> listAll(int page, int size, String search, String sort);
-
     ProductResponse create(ProductRequest request);
-
     ProductResponse update(UUID id, ProductRequest request);
-
     ProductResponse deactivate(UUID id);
-
     ProductResponse adjustStock(UUID id, AdjustStockRequest request);
 }

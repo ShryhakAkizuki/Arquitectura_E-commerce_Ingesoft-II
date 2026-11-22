@@ -3,12 +3,12 @@
 > **Arquitectura E-commerce Ingesoft II** — Prueba técnica FullStack, Ingeniería de Software II (Ingesoft).
 
 E-commerce de un solo dominio (productos de tecnología) con registro de usuario,
-catálogo, carrito, checkout y pago **simulado**. El proyecto se desarrolla de
-manera incremental: la documentación describe **solo lo implementado hasta el
-último commit** y las secciones de cada módulo se añaden cuando el módulo se
-implementa.
+catálogo, carrito, checkout y pago **simulado**. El proyecto está **completo**:
+todos los módulos del enunciado están implementados, con pruebas unitarias y de
+contrato (backend) y de componentes (frontend), y verificados end-to-end
+(puntos de control CP-1…CP-5 desde base de datos limpia).
 
-**Última actualización de la documentación:** 2026-11-13.
+**Última actualización de la documentación:** 2026-11-22.
 
 ---
 
@@ -34,8 +34,9 @@ implementa.
 
 | Documento | Contenido |
 |-----------|-----------|
-| [docs/arquitectura.md](docs/arquitectura.md) | Visión de conjunto, capas, flujo de una petición, estado por módulo |
+| [docs/arquitectura.md](docs/arquitectura.md) | Visión de conjunto, capas, flujo de una petición, estado final por módulo, E2E y capturas |
 | [docs/api.md](docs/api.md) | Endpoints implementados (Auth, Users, Products, Carrito, Checkout, Órdenes), contrato de errores, credenciales demo |
+| [docs/screenshots/](docs/screenshots) | Capturas del flujo completo (catálogo, carrito, checkout éxito/rechazo, órdenes, paneles admin, Swagger) |
 
 Documentación interactiva de la API (Swagger UI, disponible al ejecutar el backend):
 <http://localhost:8080/swagger-ui.html>
@@ -91,9 +92,12 @@ Arquitectura_E-commerce_Ingesoft-II/
 ├── README.md
 ├── docs/                         # Documentación del proyecto
 │   ├── api.md
-│   └── arquitectura.md
+│   ├── arquitectura.md
+│   └── screenshots/              # Capturas del flujo completo (13 PNG)
 ├── scripts/
-│   └── .gitkeep
+│   ├── e2e-checkpoints.ps1       # Verificación E2E (57 aserciones)
+│   ├── capture-screenshots.cjs   # Regenera las capturas (puppeteer-core + Edge)
+│   └── package.json              # Dependencias del script de capturas
 ├── frontend/                     # Frontend (React 18 + TypeScript + Vite)
 │   ├── index.html
 │   ├── package.json
@@ -378,6 +382,33 @@ mvnw.cmd test     # Windows
 > Maven (ver [backend/pom.xml](backend/pom.xml)): cualquier build o test falla
 > si el código viola [checkstyle.xml](backend/checkstyle.xml).
 
+Frontend (Vitest + React Testing Library), desde `frontend/`:
+
+```bash
+npm run test    # 13 tests: ProductCard, CartPage, CheckoutPage
+```
+
+### Verificación end-to-end (CP-1…CP-5)
+
+[`scripts/e2e-checkpoints.ps1`](scripts/e2e-checkpoints.ps1) recorre el guion
+completo de la sustentación contra una **base de datos limpia** (el backend
+debe estar corriendo). Ejecuta 57 aserciones sobre la API real:
+
+| Punto de control | Qué verifica |
+|------------------|--------------|
+| CP-1 | Registro (201/409), login, perfil propio, ruta admin denegada (403) |
+| CP-2 | Catálogo público (8 productos, búsqueda, detalle) + CRUD admin (crear, actualizar, stock, soft delete → 404 en público) |
+| CP-3 | Carrito: agregar, acumular, cambiar cantidad, subtotal, persistencia, `INSUFFICIENT_STOCK` (409) |
+| CP-4 | Checkout exitoso (stock descontado, carrito vacío), rechazo `...0002` (402, orden `PENDING`, stock intacto) y reintento exitoso |
+| CP-5 | Mis órdenes, admin `PAID → SHIPPED → DELIVERED`, transición inválida (409) y cancelación con restitución de stock |
+
+```powershell
+# Con el backend corriendo contra una BD limpia:
+powershell -ExecutionPolicy Bypass -File scripts\e2e-checkpoints.ps1
+```
+
+Última ejecución (2026-11-22, BD recreada desde cero): **57/57 en verde**.
+
 ---
 
 ## Credenciales demo (seed)
@@ -447,6 +478,80 @@ Detalle completo (bodies, códigos de error, ejemplos) en
 | `/admin/products` | JWT + `ADMIN` (tras [`AdminRoute.tsx`](frontend/src/components/AdminRoute.tsx)) | [`AdminProductsPage.tsx`](frontend/src/pages/admin/AdminProductsPage.tsx): CRUD de productos, ajuste de stock en línea y desactivación |
 | `/admin/orders` | JWT + `ADMIN` (tras [`AdminRoute.tsx`](frontend/src/components/AdminRoute.tsx)) | [`AdminOrdersPage.tsx`](frontend/src/pages/admin/AdminOrdersPage.tsx): listado paginado con filtro por estado y acciones según la máquina de estados (enviar, entregar, cancelar con restitución de stock) |
 | `*` | — | 404 — página no encontrada |
+
+---
+
+## Flujo completo paso a paso
+
+Guion de la sustentación con las pantallas reales de la app.
+Credenciales demo: `admin@demo.com` / `Admin123!` y `user@demo.com` / `User123!`.
+
+### 1 · Catálogo público (R5)
+
+Visite `http://localhost:5173` sin iniciar sesión: grid paginado con búsqueda
+y detalle de producto.
+
+| Catálogo | Detalle de producto |
+|----------|---------------------|
+| ![](docs/screenshots/01-catalogo.png) | ![](docs/screenshots/02-detalle-producto.png) |
+
+### 2 · Registro y login (R1)
+
+- Cree una cuenta en `/register` (o use las cuentas demo) e inicie sesión en `/login`.
+- El admin llega a `/admin/products`; el usuario común a `/`. Un usuario común
+  sobre una ruta admin recibe `403`.
+
+| Login | Perfil |
+|-------|--------|
+| ![](docs/screenshots/03-login.png) | ![](docs/screenshots/10-perfil.png) |
+
+### 3 · Carrito (R3)
+
+Como usuario: agregue productos desde el catálogo o el detalle (el botón está
+activo solo con sesión), cambie cantidades en `/cart` y persista el contenido
+al recargar. Intentar exceder el stock (`Cable USB-C 100W`, disponible 2)
+muestra `409 INSUFFICIENT_STOCK`.
+
+![](docs/screenshots/04-carrito.png)
+
+### 4 · Checkout: éxito, rechazo y reintento (R3/R4)
+
+En `/checkout`: dirección de envío, método y tarjeta.
+
+- **Éxito** (cualquier tarjeta, p. ej. `4242 4242 4242 4242`): la orden queda
+  `PAID`, el stock se descuenta y el carrito se vacía.
+- **Rechazo** (tarjeta terminada en `0002`, p. ej. `4242 4242 4242 0002`):
+  `402 PAYMENT_DECLINED`; la orden queda `PENDING`, el stock **no** se
+  descuenta y la pantalla ofrece reintentar con otra tarjeta.
+
+| Formulario | Éxito | Rechazado |
+|-----------|-------|-----------|
+| ![](docs/screenshots/05-checkout-form.png) | ![](docs/screenshots/06-checkout-exito.png) | ![](docs/screenshots/07-checkout-rechazado.png) |
+
+### 5 · Órdenes (R2)
+
+- `/orders`: historial propio con estado, totales y enlace al detalle.
+- El admin en `/admin/orders` avanza el ciclo de vida: `PAID → SHIPPED →
+  DELIVERED`; cancelar desde `PAID` **restituye el stock**. Transiciones
+  inválidas responden `409 ORDER_STATUS_INVALID`.
+- El admin en `/admin/products` gestiona el CRUD, el stock y la desactivación
+  (soft delete: desaparece del catálogo público).
+
+| Mis órdenes | Detalle de orden |
+|-------------|------------------|
+| ![](docs/screenshots/08-mis-ordenes.png) | ![](docs/screenshots/09-detalle-orden.png) |
+
+| Panel admin: productos | Panel admin: órdenes |
+|------------------------|----------------------|
+| ![](docs/screenshots/11-admin-productos.png) | ![](docs/screenshots/12-admin-ordenes.png) |
+
+### 6 · API documentada
+
+Swagger UI con los endpoints de todos los módulos, lista en
+<http://localhost:8080/swagger-ui.html> y guía narrativa en
+[docs/api.md](docs/api.md).
+
+![](docs/screenshots/13-swagger.png)
 
 ---
 
