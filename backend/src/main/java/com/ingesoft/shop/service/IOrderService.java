@@ -13,6 +13,5 @@ import com.ingesoft.shop.dto.response.OrderResponse;
 public interface IOrderService {
 
     Page<OrderResponse> myOrders(String email, int page, int size);
-
     OrderDetailResponse myOrderDetail(String email, UUID id);
 }

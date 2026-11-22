@@ -6,7 +6,7 @@
 
 ## 1. Resumen
 
-Tienda online con autenticación por roles (usuario/administrador), gestión CRUD de productos y stock, carrito de compras persistente, checkout con pago simulado y trazabilidad de órdenes. La arquitectura prioriza **capas bien separadas**, **interfaces que desacoplan módulos** y **documentación como entregable**, para cumplir los criterios de evaluación (buenas prácticas, SOLID, DRY, sustentación).
+Tienda online con autenticación por roles (usuario/administrador), gestión CRUD de productos y stock, carrito de compras persistente, checkout con pago simulado y trazabilidad de órdenes. La arquitectura prioriza **capas bien separadas**, **interfaces que desacoplan módulos** y **documentación como entregable**, para cumplir los criterios de evaluación.
 
 ### 1.1 Trazabilidad de requerimientos
 
@@ -23,7 +23,6 @@ Tienda online con autenticación por roles (usuario/administrador), gestión CRU
 | Criterio | Cómo se cumple |
 |----------|----------------|
 | Buenas prácticas | Convenciones por capas, DTOs de entrada/salida, manejo global de errores, validación con Bean Validation, Checkstyle en el build |
-| Sustentación | Arquitectura por capas, diagramas, ADRs en [`decisiones-adr.md`](decisiones-adr.md) y evidencias de código en [`solid-dry.md`](solid-dry.md) |
 | Pruebas unitarias | JUnit 5 + Mockito en backend, Vitest + RTL en frontend |
 
 ## 3. Visión general de la arquitectura
@@ -94,7 +93,7 @@ Página / Componente → api/* (funciones por dominio) → client.ts (Axios) →
 
 - **Capa de datos única** ([`api/`](../frontend/src/api)): un módulo por dominio de la API
   (`auth.ts`, `products.ts`, `cart.ts`, `checkout.ts`, `orders.ts`, `admin.ts`).
-  Ningún componente usa Axios directamente: siempre consume `api/*` (DRY, §8).
+  Ningún componente usa Axios directamente: siempre consume `api/*`.
 - **Tipos espejo del contrato** ([`types/`](../frontend/src/types)): cada interfaz declara el
   DTO de backend que refleja (p. ej. [`types/api.ts`](../frontend/src/types/api.ts) espeja
   `ApiError` y `Page<T>` de Spring Data). El contrato de errores del backend se vuelve un
@@ -121,15 +120,6 @@ Página / Componente → api/* (funciones por dominio) → client.ts (Axios) →
   (default `http://localhost:8080/api`).
 - **Calidad de código:** ESLint + Prettier (`npm run lint` / `npm run format` en
   [`frontend/`](../frontend)).
-
-> **Estado actual del frontend:** implementados la infraestructura (Vite/TS/ESLint), la capa
-> de datos completa para todos los dominios de la API, la sesión global, el estado global
-> del carrito ([`CartContext`](../frontend/src/context/CartContext.tsx)/[`useCart`](../frontend/src/hooks/useCart.ts), §3.5),
-> las guardas de ruta, el mapa de rutas ([`App.tsx`](../frontend/src/App.tsx)), las páginas de
-> autenticación (login, registro y perfil, §3.3), las páginas de catálogo, detalle de producto
-> y panel admin de productos (§3.4), la página de carrito con las acciones de «Agregar al
-> carrito» en catálogo y detalle (§3.5), la página de checkout con pago simulado (§3.6) y el
-> módulo de órdenes: mis órdenes, detalle de orden y panel admin de órdenes (§3.7).
 
 ### 3.3 Páginas de autenticación implementadas
 
@@ -168,14 +158,14 @@ y los tipos espejo; ningún componente habla con Axios directamente.
 | Página | Ruta | Comportamiento |
 |--------|------|----------------|
 | [`CatalogPage`](../frontend/src/pages/CatalogPage.tsx) | `/` | Catálogo público paginado (`GET /api/products`, 10 por página) con búsqueda con debounce (400 ms); estados de carga, de error con botón «Reintentar» y vacío con «Limpiar búsqueda» cuando hay un filtro activo |
-| [`ProductDetailPage`](../frontend/src/pages/ProductDetailPage.tsx) | `/product/:id` | Detalle del producto (`GET /api/products/{id}`): imagen con fallback, precio en COP y `updatedAt` en formato es-CO; la cantidad queda acotada al stock disponible; 404 → «Producto no encontrado»; «Agregar al carrito» (F-3.3): los usuarios autenticados agregan la cantidad seleccionada vía `useCart.add` con feedback de éxito y errores del backend textualmente; sin sesión, enlace a login |
+| [`ProductDetailPage`](../frontend/src/pages/ProductDetailPage.tsx) | `/product/:id` | Detalle del producto (`GET /api/products/{id}`): imagen con fallback, precio en COP y `updatedAt` en formato es-CO; la cantidad queda acotada al stock disponible; 404 → «Producto no encontrado»; «Agregar al carrito»: los usuarios autenticados agregan la cantidad seleccionada vía `useCart.add` con feedback de éxito y errores del backend textualmente; sin sesión, enlace a login |
 | [`AdminProductsPage`](../frontend/src/pages/admin/AdminProductsPage.tsx) | `/admin/products` (tras [`AdminRoute`](../frontend/src/components/AdminRoute.tsx)) | Gestión de productos: tabla paginada que incluye desactivados, búsqueda, creación y edición vía [`ProductForm`](../frontend/src/components/admin/ProductForm.tsx), ajuste absoluto de stock en línea (entero ≥ 0, `PATCH .../stock`), desactivación con confirmación (soft delete) y mensaje de éxito que se oculta solo a los 4 s |
 
 Componentes compartidos:
 
 | Componente | Uso |
 |------------|-----|
-| [`ProductCard`](../frontend/src/components/ProductCard.tsx) | Tarjeta de la grilla del catálogo y del detalle: precio en COP con `Intl.NumberFormat` (es-CO), insignia de stock («Agotado», «Quedan N» cuando quedan ≤ 3, o «En stock»), imagen con `loading="lazy"` y fallback de error, y botón «Agregar al carrito» (F-3.3) que suma 1 unidad vía `useCart.add` con feedback de éxito (2 s) y errores del backend textualmente |
+| [`ProductCard`](../frontend/src/components/ProductCard.tsx) | Tarjeta de la grilla del catálogo y del detalle: precio en COP con `Intl.NumberFormat` (es-CO), insignia de stock («Agotado», «Quedan N» cuando quedan ≤ 3, o «En stock»), imagen con `loading="lazy"` y fallback de error, y botón «Agregar al carrito» que suma 1 unidad vía `useCart.add` con feedback de éxito (2 s) y errores del backend textualmente |
 | [`Pagination`](../frontend/src/components/Pagination.tsx) | Navegación de páginas con ventana con elipsis y `aria-current`; se oculta cuando el resultado ocupa una sola página |
 | [`EmptyState`](../frontend/src/components/EmptyState.tsx) | Estado vacío/error genérico (`role="status"`) con ranura para acciones |
 
@@ -199,14 +189,14 @@ Convenciones comunes a las tres páginas:
   [`EmptyState.module.css`](../frontend/src/styles/EmptyState.module.css) y
   [`ProductForm.module.css`](../frontend/src/styles/ProductForm.module.css)).
 
-### 3.5 Carrito: estado global, página y acciones de agregar (F-3.1, F-3.2, F-3.3)
+### 3.5 Carrito: estado global, página y acciones de agregar
 
 El módulo de carrito cierra el frontend del requerimiento R3. Sigue la misma
 regla de dependencias que el resto de la SPA: las páginas y componentes
 consumen la capa `api/*` y el contexto global; ningún componente habla con
 Axios directamente.
 
-**Estado global — [`CartContext`](../frontend/src/context/CartContext.tsx) (F-3.1, acceso vía [`useCart`](../frontend/src/hooks/useCart.ts)):**
+**Estado global — [`CartContext`](../frontend/src/context/CartContext.tsx) (acceso vía [`useCart`](../frontend/src/hooks/useCart.ts)):**
 
 - **El backend es la única fuente de verdad:** la persistencia vive en
   `/api/cart/**` (el carrito es por usuario y "persiste entre sesiones", R3);
@@ -219,14 +209,14 @@ Axios directamente.
 - **Mutaciones contra la API:** `add` (POST `/cart/items`), `update`
   (PATCH `/cart/items/{itemId}`) y `remove` (DELETE `/cart/items/{itemId}`).
   El backend devuelve el `CartResponse` completo, que reemplaza el estado:
-  precios capturados por el servidor, subtotal y validación de stock (B-3.2).
+  precios capturados por el servidor, subtotal y validación de stock.
 - **Propagación de errores:** los errores de mutación (p. ej. 409
   `INSUFFICIENT_STOCK`) se propagan al componente llamador como `ApiError`,
-  cuyo mensaje se muestra textualmente (misma convención de §3.3).
+  cuyo mensaje se muestra textualmente.
 
 El proveedor se monta en [`main.tsx`](../frontend/src/main.tsx) dentro de
 `AuthProvider` (depende de la sesión vía `useAuth`), siguiendo el mismo
-patrón que `AuthContext`/`useAuth` (F-0.4).
+patrón que `AuthContext`/`useAuth`.
 
 **Páginas y componentes:**
 
@@ -252,10 +242,10 @@ Convenciones:
   ([`CartPage.module.css`](../frontend/src/styles/CartPage.module.css) y
   [`QuantitySelector.module.css`](../frontend/src/styles/QuantitySelector.module.css)).
 
-### 3.6 Checkout: finalizar compra con pago simulado (F-4.1)
+### 3.6 Checkout: finalizar compra con pago simulado
 
 El módulo de checkout cierra el frontend del requerimiento R3 y consume el
-endpoint `POST /api/checkout` ya documentado en §4.6 de [`api.md`](api.md).
+endpoint `POST /api/checkout` ya documentado [`api.md`](api.md).
 Sigue la misma regla de dependencias que el resto de la SPA: consume la capa
 [`api/checkout.ts`](../frontend/src/api/checkout.ts) y
 [`useCart`](../frontend/src/hooks/useCart.ts); ningún componente habla con
@@ -266,12 +256,12 @@ Axios directamente.
 | [`CheckoutPage`](../frontend/src/pages/CheckoutPage.tsx) | `/checkout` (tras [`ProtectedRoute`](../frontend/src/components/ProtectedRoute.tsx)) | Formulario en dos secciones — «1 · Dirección de envío» (textarea, ≤ 255) y «2 · Pago» (método `Visa`/`Mastercard`/`PSE`, número de tarjeta y titular) — con un resumen del pedido a la derecha (ítems con `lineTotal`, subtotal del backend, envío fijo y total). Estados: carga del carrito (spinner), error de carga (con «Reintentar»), carrito vacío ([`EmptyState`](../frontend/src/components/EmptyState.tsx) con CTA al catálogo), formulario, éxito y rechazo |
 | Pantalla de éxito | Tras `201` | Muestra `orderNumber` y `total` pagado; llama a `useCart.refresh()` (el backend ya dejó el carrito vacío); CTAs «Ver mis órdenes» (`/orders`) y «Seguir comprando» (`/`) |
 | Pantalla de pago rechazado | `402 PAYMENT_DECLINED` | Muestra el mensaje del backend tal cual y el `orderNumber` extraído del mensaje (regex `ORD-…`); informa que la orden quedó `PENDING`, que el stock no se descontó y que puede reintentar con otra tarjeta; CTAs «Reintentar el pago» (vuelve al formulario) y «Volver al catálogo» |
-| Otros errores | Cualquier otro `ApiError` | `ApiError.message` en un `<p role="alert">` bajo el formulario (misma convención de §3.3); solo los errores no tipados muestran un mensaje genérico |
+| Otros errores | Cualquier otro `ApiError` | `ApiError.message` en un `<p role="alert">` bajo el formulario; solo los errores no tipados muestran un mensaje genérico |
 
 Convenciones:
 
 - **Envío fijo:** la constante `SHIPPING_FEE = 5000` del componente espeja
-  el `checkout.shipping-fee` del backend (envío fijo, §4.6 de
+  el `checkout.shipping-fee` del backend (envío fijo de
   [`api.md`](api.md)); el total que confirma la compra es el de la
   respuesta `OrderResponse`, no el del resumen local.
 - **Validación en cliente espejo del backend:** dirección obligatoria
@@ -282,7 +272,7 @@ Convenciones:
   `inputMode="numeric"` / `autoComplete="cc-number"`.
 - **Ayuda de demo:** el hint del input de tarjeta indica que las tarjetas
   terminadas en `0002` son rechazadas por la pasarela simulada (para
-  demostrar el flujo de rechazo, §4.6 de [`api.md`](api.md)).
+  demostrar el flujo de rechazo de [`api.md`](api.md)).
 - **Fuente de verdad del resumen:** los ítems, el subtotal y el total se
   derivan de `useCart`; la página no recalcula precios.
 - **Estados por botón:** `submitting` deshabilita el envío y cambia la
@@ -299,7 +289,7 @@ Convenciones:
 
 El módulo de órdenes cierra el frontend de la trazabilidad de compras (lado usuario,
 R3) y de la gestión admin de órdenes (R2), y consume los endpoints ya documentados
-en §4.7 y §4.8 de [`api.md`](api.md). Sigue la misma regla de dependencias que el
+en [`api.md`](api.md). Sigue la misma regla de dependencias que el
 resto de la SPA: las páginas consumen la capa
 [`api/orders.ts`](../frontend/src/api/orders.ts) (consultas del usuario) y
 [`api/admin.ts`](../frontend/src/api/admin.ts) (gestión) con los tipos espejo de
@@ -310,20 +300,20 @@ Axios directamente.
 |----------|-----------|----------------|
 | [`MyOrdersPage`](../frontend/src/pages/MyOrdersPage.tsx) | `/orders` (tras [`ProtectedRoute`](../frontend/src/components/ProtectedRoute.tsx)) | Listado paginado de las órdenes propias (`GET /api/orders/mine`, 10 por página, recientes primero): número de orden y fecha en formato es-CO, resumen de ítems («N × producto»), [`StatusBadge`](../frontend/src/components/StatusBadge.tsx) con el estado, total en COP y enlace «Ver detalle →» a `/orders/{id}`. Estados: carga (spinner), error con botón «Reintentar» (muestra `ApiError.message`), vacío (`EmptyState` con CTA al catálogo) y paginación con [`Pagination`](../frontend/src/components/Pagination.tsx) |
 | [`OrderDetailPage`](../frontend/src/pages/OrderDetailPage.tsx) | `/orders/:id` (tras [`ProtectedRoute`](../frontend/src/components/ProtectedRoute.tsx)) | Detalle de una orden propia (`GET /api/orders/mine/{id}`): encabezado con `orderNumber`, fecha de realización y [`StatusBadge`](../frontend/src/components/StatusBadge.tsx); tres tarjetas — **Ítems** (tabla con precio unitario, cantidad y subtotal por línea, más totales: subtotal, envío y total), **Dirección de envío** y **Pago** (estado con color —Pendiente/Confirmado/Fallido—, método, `transactionId` y fecha de procesamiento; «Motivo de rechazo» cuando el pago falló, y «Sin registro de pago todavía.» si aún no hay `Payment`). 404 `ORDER_NOT_FOUND` → CTA «Volver a mis órdenes»; otros errores → «Reintentar» |
-| [`AdminOrdersPage`](../frontend/src/pages/admin/AdminOrdersPage.tsx) | `/admin/orders` (tras [`AdminRoute`](../frontend/src/components/AdminRoute.tsx)) | Gestión de órdenes (`GET /api/admin/orders`, 10 por página, con filtro por estado —todos, `PENDING`, `PAID`, `SHIPPED`, `DELIVERED`, `CANCELLED`—): tabla con número de orden + fecha, resumen de ítems, total, [`StatusBadge`](../frontend/src/components/StatusBadge.tsx) y acciones según la máquina de estados (§4.8 de [`api.md`](api.md)): `PENDING` → «Cancelar»; `PAID` → «Enviar» o «Cancelar» (avisa que se restituye el stock); `SHIPPED` → «Entregar»; `DELIVERED`/`CANCELLED` → sin acciones. Cada transición pide confirmación, deshabilita las acciones de todas las filas mientras hay una petición en vuelo y actualiza la fila con la respuesta del backend; el mensaje de éxito se oculta solo a los 4 s. Estados: carga, error con «Reintentar», vacío (con mensaje distinto si el filtro no es «Todos») y paginación |
+| [`AdminOrdersPage`](../frontend/src/pages/admin/AdminOrdersPage.tsx) | `/admin/orders` (tras [`AdminRoute`](../frontend/src/components/AdminRoute.tsx)) | Gestión de órdenes (`GET /api/admin/orders`, 10 por página, con filtro por estado —todos, `PENDING`, `PAID`, `SHIPPED`, `DELIVERED`, `CANCELLED`—): tabla con número de orden + fecha, resumen de ítems, total, [`StatusBadge`](../frontend/src/components/StatusBadge.tsx) y acciones según la máquina de estados ([`api.md`](api.md)): `PENDING` → «Cancelar»; `PAID` → «Enviar» o «Cancelar» (avisa que se restituye el stock); `SHIPPED` → «Entregar»; `DELIVERED`/`CANCELLED` → sin acciones. Cada transición pide confirmación, deshabilita las acciones de todas las filas mientras hay una petición en vuelo y actualiza la fila con la respuesta del backend; el mensaje de éxito se oculta solo a los 4 s. Estados: carga, error con «Reintentar», vacío (con mensaje distinto si el filtro no es «Todos») y paginación |
 | [`StatusBadge`](../frontend/src/components/StatusBadge.tsx) | Reutilizable (las 3 páginas anteriores) | Componente puro de presentación: etiqueta del estado de la orden en español («Pendiente de pago», «Pagada», «Enviada», «Entregada», «Cancelada») con clase de color por estado y `title` con la etiqueta completa |
 
 Convenciones:
 
 - **La máquina de estados vive en el backend:** las acciones del panel admin solo
-  reflejan las transiciones válidas documentadas en §4.8 de [`api.md`](api.md)
+  reflejan las transiciones válidas documentadas en [`api.md`](api.md)
   (`PENDING → CANCELLED`, `PAID → SHIPPED | CANCELLED`, `SHIPPED → DELIVERED`); la
   transición final la autoriza el servicio (409 `ORDER_STATUS_INVALID` si el estado
   cambió entre la carga y el clic, y el error se muestra textualmente).
 - **Formateo es-CO:** precios con `Intl.NumberFormat('es-CO', { currency: 'COP' })`
-  y fechas con `Intl.DateTimeFormat('es-CO')` (mismo patrón de §3.4 y §3.6).
+  y fechas con `Intl.DateTimeFormat('es-CO')`.
 - **Guardas de carrera:** `requestIdRef` descarta respuestas desordenadas ante
-  cambios de página o de filtro (misma convención de §3.4).
+  cambios de página o de filtro.
 - **Rutas protegidas:** `/orders`, `/orders/:id` y `/admin/orders` pasaron de
   públicas (placeholders) a protegidas con [`ProtectedRoute`](../frontend/src/components/ProtectedRoute.tsx)
   / [`AdminRoute`](../frontend/src/components/AdminRoute.tsx) en [`App.tsx`](../frontend/src/App.tsx);
@@ -503,6 +493,6 @@ Cada test documenta **arrangement–action–assertion** y el requerimiento que 
 |--------|-----------|
 | PostgreSQL no instalado en la máquina de sustentación | Perfil `h2` en memoria (`--spring.profiles.active=h2`), **ya configurado** en `application.yml` y con H2 en `pom.xml` |
 | Sobreventa por compras concurrentes | Bloqueo pesimista **implementado**: `findByCartIdForUpdate` y `findByIdForUpdate` (`PESSIMISTIC_WRITE`) en el checkout (ADR-015) + test de concurrencia pendiente |
-| Alcance que crece en la sustentación | El MVP está acotado a §1.1; mejoras (gateway real, Docker, despliegue) se documentan como roadmap en los ADR, no se implementan |
+| Alcance que crece en la sustentación | El MVP está acotado; mejoras (gateway real, Docker, despliegue) se documentan como roadmap en los ADR, no se implementan |
 | Diferencia de versiones JDK/Node | Maven wrapper en backend + `engines` en `package.json` + requisitos en README |
 

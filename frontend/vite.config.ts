@@ -1,5 +1,5 @@
 import react from '@vitejs/plugin-react';
-import { defineConfig } from 'vite';
+import { defineConfig } from 'vitest/config';
 
 // El puerto 5173 es el contrato del monorepo (CORS del backend apunta a http://localhost:5173).
 export default defineConfig({
@@ -8,5 +8,11 @@ export default defineConfig({
     host: true,
     port: 5173,
     strictPort: true,
+  },
+
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    include: ['src/**/__tests__/**/*.test.{ts,tsx}'],
   },
 });
